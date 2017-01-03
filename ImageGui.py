@@ -8,18 +8,25 @@ Image visualization and analysis GUI
 from __future__ import division
 import sip
 sip.setapi('QString', 2)
-import os, math, cv2, nrrd
+import os, time, math, cv2, nrrd
 from xml.dom import minidom
 import numpy as np
 from PyQt4 import QtGui, QtCore
 import pyqtgraph as pg
 
 
-def start():
+def start(data=None,label=None,mode=None):
     app = QtGui.QApplication.instance()
     if app is None:
         app = QtGui.QApplication([])
     imageGuiObj = ImageGui(app)
+    if data is not None:
+        app.processEvents()
+        imageGuiObj.loadImageData(data,label)
+        if mode=='channels':
+            imageGuiObj.setViewChannelsOn()
+        elif mode=='3D':
+            imageGuiObj.setView3dOn()
     app.exec_()
 
 
@@ -31,6 +38,22 @@ class ImageGui():
         self.fileOpenType = 'Images (*.tif *.jpg)'
         self.fileSavePath = self.fileOpenPath
         self.imageObjs = []
+        self.selectedFileIndex = []
+        self.checkedFileIndex = [[] for _ in range(4)]
+        self.selectedWindow = 0
+        self.displayedWindows = []
+        self.selectedChannelIndex = [[] for _ in range(4)]
+        self.sliceProjState = [0 for _ in range(4)]
+        self.xyzState = [2 for _ in range(4)]
+        self.imageShapeIndex = [(0,1,2) for _ in range(4)]
+        self.imageRange = [None for _ in range(4)]
+        self.imageIndex = [None for _ in range(4)]
+        self.normState = [False for _ in range(4)]
+        self.stitchState = [False for _ in range(4)]
+        self.stitchPos = np.full((4,1,3),np.nan)
+        self.stitchShape = [None for _ in range(4)]
+        self.holdStitchRange = [False for _ in range(4)]
+        self.selectedAtlasRegions = [[] for _ in range(4)]
         
         # main window
         winHeight = 500
@@ -109,10 +132,17 @@ class ImageGui():
         self.ignoreImageRangeChange = False
         self.imageViewBox = [pg.ViewBox(invertY=True,enableMouse=False,enableMenu=False) for _ in range(4)]
         self.imageItem = [pg.ImageItem() for _ in range(4)]
-        for viewBox,imgItem in zip(self.imageViewBox,self.imageItem):
+        mouseClickCallbacks = (self.window1MouseClickCallback,self.window2MouseClickCallback,self.window3MouseClickCallback,self.window4MouseClickCallback)
+        for viewBox,imgItem,clickCallback in zip(self.imageViewBox,self.imageItem,mouseClickCallbacks):
             viewBox.sigRangeChanged.connect(self.imageRangeChanged)
+            imgItem.mouseClickEvent = clickCallback
             viewBox.addItem(imgItem)
             self.imageLayout.addItem(viewBox)
+        
+        self.view3dSliceLines = [[pg.InfiniteLine(pos=0,angle=angle,pen='r',movable=True) for angle in (0,90)] for _ in range(3)]
+        for windowLines in self.view3dSliceLines:
+            for line in windowLines:
+                line.sigDragged.connect(self.view3dSliceLineDragged)
         
         # file selection
         self.fileListbox = QtGui.QListWidget()
@@ -134,19 +164,11 @@ class ImageGui():
         self.stitchCheckbox = QtGui.QCheckBox('Stitch')
         self.stitchCheckbox.stateChanged.connect(self.stitchCheckboxCallback)
         
-        self.viewChannelsCheckbox = QtGui.QCheckBox('Channel View')
-        self.viewChannelsCheckbox.stateChanged.connect(self.viewChannelsCheckboxCallback)
-        
-        self.view3DCheckbox = QtGui.QCheckBox('3D View')
-        self.view3DCheckbox.stateChanged.connect(self.view3DCheckboxCallback)
-        
         self.fileSelectLayout = QtGui.QGridLayout()
         self.fileSelectLayout.addWidget(self.moveFileDownButton,0,0,1,1)
         self.fileSelectLayout.addWidget(self.moveFileUpButton,0,1,1,1)
         self.fileSelectLayout.addWidget(self.removeFileButton,0,2,1,2)
-        self.fileSelectLayout.addWidget(self.stitchCheckbox,0,4,1,2)
-        self.fileSelectLayout.addWidget(self.viewChannelsCheckbox,0,6,1,2)
-        self.fileSelectLayout.addWidget(self.view3DCheckbox,0,8,1,2)
+        self.fileSelectLayout.addWidget(self.stitchCheckbox,0,8,1,2)
         self.fileSelectLayout.addWidget(self.fileListbox,1,0,9,10)
         
         # window and channel selection
@@ -177,44 +199,44 @@ class ImageGui():
         # view control
         self.imageDimensionsLabel = QtGui.QLabel('XYZ Dimensions: ')
         self.imagePixelSizeLabel = QtGui.QLabel('XYZ Pixel Size (\u03BCm): ')        
-
-        self.imageNumEditLayout = QtGui.QFormLayout()
-        self.imageNumEdit = QtGui.QLineEdit('')
-        self.imageNumEdit.setAlignment(QtCore.Qt.AlignHCenter)
-        self.imageNumEdit.editingFinished.connect(self.imageNumEditCallback)
-        self.imageNumEditLayout.addRow('Image #:',self.imageNumEdit)
         
-        self.sliceProjGroupBox = QtGui.QGroupBox()
-        self.sliceProjGroupLayout = QtGui.QVBoxLayout()
         self.sliceButton = QtGui.QRadioButton('Slice')
         self.sliceButton.setChecked(True)
-        self.sliceButton.clicked.connect(self.sliceProjButtonCallback)
         self.projectionButton = QtGui.QRadioButton('Projection')
-        self.projectionButton.clicked.connect(self.sliceProjButtonCallback)
+        self.sliceProjButtons = (self.sliceButton,self.projectionButton)
+        for button in self.sliceProjButtons:
+            button.clicked.connect(self.sliceProjButtonCallback)
+        self.sliceProjGroupLayout = QtGui.QVBoxLayout()
         self.sliceProjGroupLayout.addWidget(self.sliceButton)
         self.sliceProjGroupLayout.addWidget(self.projectionButton)
+        self.sliceProjGroupBox = QtGui.QGroupBox()
         self.sliceProjGroupBox.setLayout(self.sliceProjGroupLayout)
-        self.sliceProjButtons = (self.sliceButton,self.projectionButton)
         
-        self.xyzGroupBox = QtGui.QGroupBox()
-        self.xyzGroupLayout = QtGui.QVBoxLayout()
         self.xButton = QtGui.QRadioButton('X')
-        self.xButton.clicked.connect(self.xyzButtonCallback)
         self.yButton = QtGui.QRadioButton('Y')
-        self.yButton.clicked.connect(self.xyzButtonCallback)
         self.zButton = QtGui.QRadioButton('Z')
         self.zButton.setChecked(True)
-        self.zButton.clicked.connect(self.xyzButtonCallback)
+        self.xyzButtons = (self.xButton,self.yButton,self.zButton)
+        for button in self.xyzButtons:
+            button.clicked.connect(self.xyzButtonCallback)
+        self.xyzGroupLayout = QtGui.QVBoxLayout()
         self.xyzGroupLayout.addWidget(self.xButton)
         self.xyzGroupLayout.addWidget(self.yButton)
         self.xyzGroupLayout.addWidget(self.zButton)
+        self.xyzGroupBox = QtGui.QGroupBox()
         self.xyzGroupBox.setLayout(self.xyzGroupLayout)
-        self.xyzButtons = (self.xButton,self.yButton,self.zButton)
+        
+        self.viewChannelsCheckbox = QtGui.QCheckBox('Channel View')
+        self.viewChannelsCheckbox.stateChanged.connect(self.viewChannelsCheckboxCallback)
+        
+        self.view3dCheckbox = QtGui.QCheckBox('3D View')
+        self.view3dCheckbox.stateChanged.connect(self.view3dCheckboxCallback)
         
         self.viewControlLayout = QtGui.QGridLayout()
         self.viewControlLayout.addWidget(self.imageDimensionsLabel,0,0,1,3)
         self.viewControlLayout.addWidget(self.imagePixelSizeLabel,1,0,1,3)
-        self.viewControlLayout.addLayout(self.imageNumEditLayout,2,0,1,2)
+        self.viewControlLayout.addWidget(self.viewChannelsCheckbox,2,0,1,1)
+        self.viewControlLayout.addWidget(self.view3dCheckbox,2,1,1,1)
         self.viewControlLayout.addWidget(self.sliceProjGroupBox,3,0,2,2)
         self.viewControlLayout.addWidget(self.xyzGroupBox,2,2,3,1)
         
@@ -225,48 +247,53 @@ class ImageGui():
         self.resetViewButton = QtGui.QPushButton('Reset View')
         self.resetViewButton.clicked.connect(self.resetViewButtonCallback)
         
-        self.xRangeLayout = QtGui.QHBoxLayout()
-        self.xRangeLabel = QtGui.QLabel('X Range')
-        self.xRangeLowEdit = QtGui.QLineEdit('')
-        self.xRangeLowEdit.setAlignment(QtCore.Qt.AlignHCenter)
-        self.xRangeLowEdit.editingFinished.connect(self.xRangeLowEditCallback)
-        self.xRangeHighEdit = QtGui.QLineEdit('')
-        self.xRangeHighEdit.setAlignment(QtCore.Qt.AlignHCenter)
-        self.xRangeHighEdit.editingFinished.connect(self.xRangeHighEditCallback)
-        self.xRangeLayout.addWidget(self.xRangeLabel)
-        self.xRangeLayout.addWidget(self.xRangeLowEdit)
-        self.xRangeLayout.addWidget(self.xRangeHighEdit)
+        self.rangeViewLabel = QtGui.QLabel('View')
+        self.rangeMinLabel = QtGui.QLabel('Min')
+        self.rangeMaxLabel = QtGui.QLabel('Max')
+        for label in (self.rangeViewLabel,self.rangeMinLabel,self.rangeMaxLabel):
+            label.setAlignment(QtCore.Qt.AlignHCenter)
         
-        self.yRangeLayout = QtGui.QHBoxLayout()
-        self.yRangeLabel = QtGui.QLabel('Y Range')
-        self.yRangeLowEdit = QtGui.QLineEdit('')
-        self.yRangeLowEdit.setAlignment(QtCore.Qt.AlignHCenter)
-        self.yRangeLowEdit.editingFinished.connect(self.yRangeLowEditCallback)
-        self.yRangeHighEdit = QtGui.QLineEdit('')
-        self.yRangeHighEdit.setAlignment(QtCore.Qt.AlignHCenter)
-        self.yRangeHighEdit.editingFinished.connect(self.yRangeHighEditCallback)
-        self.yRangeLayout.addWidget(self.yRangeLabel)
-        self.yRangeLayout.addWidget(self.yRangeLowEdit)
-        self.yRangeLayout.addWidget(self.yRangeHighEdit)
+        self.xRangeLabel = QtGui.QLabel('X')
+        self.yRangeLabel = QtGui.QLabel('Y')
+        self.zRangeLabel = QtGui.QLabel('Z')
         
-        self.zRangeLayout = QtGui.QHBoxLayout()
-        self.zRangeLabel = QtGui.QLabel('Z Range')
-        self.zRangeLowEdit = QtGui.QLineEdit('')
-        self.zRangeLowEdit.setAlignment(QtCore.Qt.AlignHCenter)
-        self.zRangeLowEdit.editingFinished.connect(self.zRangeLowEditCallback)
-        self.zRangeHighEdit = QtGui.QLineEdit('')
-        self.zRangeHighEdit.setAlignment(QtCore.Qt.AlignHCenter)
-        self.zRangeHighEdit.editingFinished.connect(self.zRangeHighEditCallback)
-        self.zRangeLayout.addWidget(self.zRangeLabel)
-        self.zRangeLayout.addWidget(self.zRangeLowEdit)
-        self.zRangeLayout.addWidget(self.zRangeHighEdit)
+        self.xImageNumEdit = QtGui.QLineEdit('')
+        self.yImageNumEdit = QtGui.QLineEdit('')
+        self.zImageNumEdit = QtGui.QLineEdit('')
+        self.imageNumEditBoxes = (self.yImageNumEdit,self.xImageNumEdit,self.zImageNumEdit)
+        for editBox in self.imageNumEditBoxes:
+            editBox.setAlignment(QtCore.Qt.AlignHCenter)
+            editBox.editingFinished.connect(self.imageNumEditCallback)
+        
+        self.xRangeMinEdit = QtGui.QLineEdit('')
+        self.xRangeMaxEdit = QtGui.QLineEdit('')
+        self.yRangeMinEdit = QtGui.QLineEdit('')
+        self.yRangeMaxEdit = QtGui.QLineEdit('')
+        self.zRangeMinEdit = QtGui.QLineEdit('')
+        self.zRangeMaxEdit = QtGui.QLineEdit('')
+        self.rangeEditBoxes = ((self.yRangeMinEdit,self.yRangeMaxEdit),(self.xRangeMinEdit,self.xRangeMaxEdit),(self.zRangeMinEdit,self.zRangeMaxEdit))
+        for editBox in (box for boxes in self.rangeEditBoxes for box in boxes):
+            editBox.setAlignment(QtCore.Qt.AlignHCenter)
+            editBox.editingFinished.connect(self.rangeEditCallback)
         
         self.rangeControlLayout = QtGui.QGridLayout()
-        self.rangeControlLayout.addWidget(self.zoomPanButton,0,0,1,1)
-        self.rangeControlLayout.addWidget(self.resetViewButton,0,1,1,1)
-        self.rangeControlLayout.addLayout(self.xRangeLayout,1,0,1,2)
-        self.rangeControlLayout.addLayout(self.yRangeLayout,2,0,1,2)
-        self.rangeControlLayout.addLayout(self.zRangeLayout,3,0,1,2)
+        self.rangeControlLayout.addWidget(self.zoomPanButton,0,0,1,2)
+        self.rangeControlLayout.addWidget(self.resetViewButton,0,2,1,2)
+        self.rangeControlLayout.addWidget(self.rangeViewLabel,1,1,1,1)
+        self.rangeControlLayout.addWidget(self.rangeMinLabel,1,2,1,1)
+        self.rangeControlLayout.addWidget(self.rangeMaxLabel,1,3,1,1)
+        self.rangeControlLayout.addWidget(self.xRangeLabel,2,0,1,1)
+        self.rangeControlLayout.addWidget(self.xImageNumEdit,2,1,1,1)
+        self.rangeControlLayout.addWidget(self.xRangeMinEdit,2,2,1,1)
+        self.rangeControlLayout.addWidget(self.xRangeMaxEdit,2,3,1,1)
+        self.rangeControlLayout.addWidget(self.yRangeLabel,3,0,1,1)
+        self.rangeControlLayout.addWidget(self.yImageNumEdit,3,1,1,1)
+        self.rangeControlLayout.addWidget(self.yRangeMinEdit,3,2,1,1)
+        self.rangeControlLayout.addWidget(self.yRangeMaxEdit,3,3,1,1)
+        self.rangeControlLayout.addWidget(self.zRangeLabel,4,0,1,1)
+        self.rangeControlLayout.addWidget(self.zImageNumEdit,4,1,1,1)
+        self.rangeControlLayout.addWidget(self.zRangeMinEdit,4,2,1,1)
+        self.rangeControlLayout.addWidget(self.zRangeMaxEdit,4,3,1,1)
                 
         # levels plot
         self.levelsPlotWidget = pg.PlotWidget(enableMenu=False)
@@ -288,7 +315,10 @@ class ImageGui():
         
         # levels control
         self.resetLevelsButton = QtGui.QPushButton('Reset Levels')
-        self.resetLevelsButton.clicked.connect(self.resetLevelsButtonCallback)        
+        self.resetLevelsButton.clicked.connect(self.resetLevelsButtonCallback)
+        
+        self.normDisplayCheckbox = QtGui.QCheckBox('Normalize Display')
+        self.normDisplayCheckbox.stateChanged.connect(self.normDisplayCheckboxCallback)
         
         self.gammaEditLayout = QtGui.QFormLayout()
         self.gammaEdit = QtGui.QLineEdit('')
@@ -316,20 +346,32 @@ class ImageGui():
         self.alphaSlider.setSingleStep(1)
         self.alphaSlider.sliderReleased.connect(self.alphaSliderCallback)
         
-        self.normDisplayCheckbox = QtGui.QCheckBox('Normalize Display')
-        self.normDisplayCheckbox.stateChanged.connect(self.normDisplayCheckboxCallback)
-        
         self.levelsControlLayout = QtGui.QGridLayout()
-        self.levelsControlLayout.addWidget(self.resetLevelsButton,0,1,1,1)
+        self.levelsControlLayout.addWidget(self.resetLevelsButton,0,0,1,1)
+        self.levelsControlLayout.addWidget(self.normDisplayCheckbox,0,1,1,1)
         self.levelsControlLayout.addLayout(self.gammaEditLayout,1,0,1,1)
-        self.levelsControlLayout.addWidget(self.gammaSlider,1,1,1,2)
+        self.levelsControlLayout.addWidget(self.gammaSlider,1,1,1,1)
         self.levelsControlLayout.addLayout(self.alphaEditLayout,2,0,1,1)
-        self.levelsControlLayout.addWidget(self.alphaSlider,2,1,1,2)
-        self.levelsControlLayout.addWidget(self.normDisplayCheckbox,3,1,1,1)
+        self.levelsControlLayout.addWidget(self.alphaSlider,2,1,1,1)
         
         # mark points tab
+        self.utilityTabs = QtGui.QTabWidget()
+        self.markPointsTable = QtGui.QTableWidget(1,3)
+        self.markPointsTable.setHorizontalHeaderLabels(['X','Y','Z'])
+#        for j in range(3):
+#            item = QtGui.QTableWidgetItem(str(j))
+#            self.markPointsTable.setItem(0,j,item)
+        self.markPointsLayout = QtGui.QGridLayout()
+        self.markPointsLayout.addWidget(self.markPointsTable,0,0,1,1)
+        self.markPointsTab = QtGui.QWidget()
+        self.markPointsTab.setLayout(self.markPointsLayout)
+        self.utilityTabs.addTab(self.markPointsTab,'Mark Points')
         
-        # warp tab
+        # align/warp tab
+        self.warpLayout = QtGui.QGridLayout()
+        self.warpTab = QtGui.QWidget()
+        self.warpTab.setLayout(self.warpLayout)
+        self.utilityTabs.addTab(self.warpTab,'Align/Warp')
         
         # main layout
         self.mainWidget = QtGui.QWidget()
@@ -344,6 +386,7 @@ class ImageGui():
         self.mainLayout.addLayout(self.rangeControlLayout,3,2,1,1)
         self.mainLayout.addWidget(self.levelsPlotWidget,1,3,1,1)
         self.mainLayout.addLayout(self.levelsControlLayout,2,3,1,1)
+        self.mainLayout.addWidget(self.utilityTabs,3,3,1,1)
         self.mainWin.show()
         
     def mainWinResizeCallback(self,event):
@@ -358,7 +401,7 @@ class ImageGui():
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
-        yRange,xRange,_ = self.getImageRange()
+        yRange,xRange = [self.imageRange[self.selectedWindow][axis] for axis in self.imageShapeIndex[self.selectedWindow][:2]]
         cv2.imwrite(filePath,self.image[yRange[0]:yRange[1],xRange[0]:xRange[1],::-1])
         
     def saveVolume(self):
@@ -366,13 +409,13 @@ class ImageGui():
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
-        currentImage = self.currentImageNum[self.selectedWindow]
-        yRange,xRange,zRange = self.getImageRange()
-        for i in range(zRange[0]+1,zRange[1]+1):
-            self.currentImageNum[self.selectedWindow] = i
+        imageIndex = self.imageIndex[self.selectedWindow]
+        yRange,xRange,zRange = [self.imageRange[self.selectedWindow][axis] for axis in self.imageShapeIndex[self.selectedWindow]]
+        for i in range(zRange[0],zRange[1]+1):
+            self.imageIndex[self.selectedWindow] = i
             self.updateImage(self.selectedWindow)
-            cv2.imwrite(filePath[:-4]+'_'+str(i)+'.tif',self.image[yRange[0]:yRange[1],xRange[0]:xRange[1],::-1])
-        self.currentImageNum[self.selectedWindow] = currentImage
+            cv2.imwrite(filePath[:-4]+'_'+str(i)+'.tif',self.image[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1,::-1])
+        self.imageIndex[self.selectedWindow] = imageIndex
                    
     def openFile(self):
         filePaths,fileType = QtGui.QFileDialog.getOpenFileNamesAndFilter(self.mainWin,'Choose File(s)',self.fileOpenPath,'Images (*.tif *.jpg *.png);;Image Series (*.tif *.jpg *.png);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml);;Numpy Array (*npy);;Allen Atlas (*.nrrd)',self.fileOpenType)
@@ -402,85 +445,84 @@ class ImageGui():
                             if minidom.parse(fpath).getElementsByTagName('Sequence').item(0).getAttribute('type') in ('ZSeries','Single'):
                                 filePaths.append(fpath)
         for filePath in filePaths:
-            self.imageObjs.append(ImageObj(filePath,fileType,numCh,chFileOrg))
-            if isinstance(filePath,list):
-                self.fileListbox.addItem(filePath[0])
-            else:
-                self.fileListbox.addItem(filePath)
-            if len(self.imageObjs)>1:
-                self.fileListbox.item(self.fileListbox.count()-1).setCheckState(QtCore.Qt.Unchecked)
-            else:
-                self.fileListbox.item(self.fileListbox.count()-1).setCheckState(QtCore.Qt.Checked)
-                self.fileListbox.blockSignals(True)
-                self.fileListbox.setCurrentRow(0)
-                self.fileListbox.blockSignals(False)
-                self.selectedFileIndex = [0]
-                self.checkedFileIndex = [[] for _ in range(4)]
-                self.checkedFileIndex[0].append(0)
-                self.selectedWindow = 0
-                self.displayedWindows = [0]
-                self.selectedChannelIndex = [[] for _ in range(4)]
-                self.currentImageNum = ['' for _ in range(4)]
-                self.sliceProjState = [0 for _ in range(4)]
-                self.xyzState = [2 for _ in range(4)]
-                self.imageShapeIndex = [(0,1,2) for _ in range(4)]
-                self.normState = [False for _ in range(4)]
-                self.stitchState = [False for _ in range(4)]
-                self.selectedAtlasRegions = [[] for _ in range(4)]
-                self.initImageWindow()
-        if self.stitchCheckbox.isChecked():
-            self.stitchPos = np.concatenate((self.stitchPos,np.full((4,len(filePaths),3),np.nan)),axis=1)
+            self.loadImageData(filePath,fileType,numCh,chFileOrg)
+        
+    def loadImageData(self,filePath,fileType,numCh=None,chFileOrg=None):
+        # filePath and fileType can also be a numpy array (Y x X x Z x Channels) and optional label, respectively
+        # Provide numCh and chFileOrg if importing a multiple file image series
+        self.imageObjs.append(ImageObj(filePath,fileType,numCh,chFileOrg))
+        if isinstance(filePath,np.ndarray):
+            label = 'data_'+time.strftime('%Y%m%d_%H%M%S') if fileType is None else fileType
+        elif isinstance(filePath,list):
+            label = filePath[0]
+        else:
+            label = fileType
+        self.fileListbox.addItem(label)
+        if len(self.imageObjs)>1:
+            self.fileListbox.item(self.fileListbox.count()-1).setCheckState(QtCore.Qt.Unchecked)
+            if self.stitchCheckbox.isChecked():
+                self.stitchPos = np.concatenate((self.stitchPos,np.full((4,1,3),np.nan)),axis=1)
+        else:
+            self.fileListbox.item(self.fileListbox.count()-1).setCheckState(QtCore.Qt.Checked)
+            self.fileListbox.blockSignals(True)
+            self.fileListbox.setCurrentRow(0)
+            self.fileListbox.blockSignals(False)
+            self.selectedFileIndex = [0]
+            self.checkedFileIndex[self.selectedWindow] = [0]
+            self.displayedWindows = [self.selectedWindow]
+            self.initImageWindow()
         
     def initImageWindow(self):
-        self.selectedChannelIndex[self.selectedWindow] = [0]
-        self.currentImageNum[self.selectedWindow] = 1 
+        self.selectedChannelIndex[self.selectedWindow] = [0] 
+        self.imageRange[self.selectedWindow] = [[0,size-1] for size in self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].data.shape]
+        self.imageIndex[self.selectedWindow] = [0,0,0]
         self.displayImageInfo()
         self.setViewBoxRangeLimits()
         self.setViewBoxRange(self.displayedWindows)
         self.displayImage()
+        if self.zoomPanButton.isChecked():
+            self.imageViewBox[self.selectedWindow].setMouseEnabled(x=True,y=True)
         
-    def resetImageWindow(self):
-        if self.stitchCheckbox.isChecked():
+    def resetImageWindow(self,window=None):
+        if window is None:
+            window = self.selectedWindow
+        self.sliceProjState[window] = 0
+        self.xyzState[window] = 2
+        self.imageShapeIndex[window] = (0,1,2)
+        self.normState[window] = False
+        self.stitchState[window] = False
+        self.selectedAtlasRegions[window] = []
+        self.displayedWindows.remove(window)
+        self.imageItem[window].setImage(np.zeros((2,2,3),dtype=np.uint8).transpose((1,0,2)),autoLevels=False)
+        self.imageViewBox[window].setMouseEnabled(x=False,y=False)
+        if window==self.selectedWindow:
+            self.sliceButton.setChecked(True)
+            self.zButton.setChecked(True)
+            self.normDisplayCheckbox.setChecked(False)
             self.stitchCheckbox.setChecked(False)
-        self.currentImageNum[self.selectedWindow] = ''
-        self.displayedWindows.remove(self.selectedWindow)
-        self.displayImageInfo()
-        self.setViewBoxRange(self.displayedWindows)
-        self.imageItem[self.selectedWindow].setImage(np.zeros((2,2,3),dtype=np.uint8).transpose((1,0,2)),autoLevels=False)
-        self.imageViewBox[self.selectedWindow].setMouseEnabled(x=False,y=False)
+            self.displayImageInfo()
+            self.setViewBoxRange(self.displayedWindows) 
+            self.clearAtlasRegions(updateImage=False)
         
     def displayImageInfo(self):
         self.updateChannelList()
-        imgNum = str(self.currentImageNum[self.selectedWindow]) if self.sliceButton.isChecked() else ''
-        self.imageNumEdit.setText(imgNum)
         self.displayImageRange()
         self.displayPixelSize()
         self.displayImageLevels()
         
     def displayImageRange(self):
         if len(self.checkedFileIndex[self.selectedWindow])>0:
-            if self.stitchCheckbox.isChecked():
-                shape = self.stitchShape[self.selectedWindow]
-                rng = self.stitchRange[self.selectedWindow]
-            else:
-                imageObj = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]]
-                shape = imageObj.data.shape
-                rng = imageObj.range
-            self.imageDimensionsLabel.setText('XYZ Dimensions: '+str(shape[1])+', '+str(shape[0])+', '+str(shape[2]))
-            self.xRangeLowEdit.setText(str(rng[1][0]+1))
-            self.xRangeHighEdit.setText(str(rng[1][1]))
-            self.yRangeLowEdit.setText(str(rng[0][0]+1))
-            self.yRangeHighEdit.setText(str(rng[0][1]))
-            self.zRangeLowEdit.setText(str(rng[2][0]+1))
-            self.zRangeHighEdit.setText(str(rng[2][1]))
+            imageShape = self.stitchShape[self.selectedWindow] if self.stitchState[self.selectedWindow] else self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].data.shape
+            self.imageDimensionsLabel.setText('XYZ Dimensions: '+str(imageShape[1])+', '+str(imageShape[0])+', '+str(imageShape[2]))
+            for editBox,imgInd in zip(self.imageNumEditBoxes,self.imageIndex[self.selectedWindow]):
+                editBox.setText(str(imgInd+1))
+            for editBox,rng in zip(self.rangeEditBoxes,self.imageRange[self.selectedWindow]):
+                editBox[0].setText(str(rng[0]+1))
+                editBox[1].setText(str(rng[1]+1))
         else:
             self.imagePixelSizeLabel.setText('XYZ Dimensions: ')
-            self.xRangeLowEdit.setText('')
-            self.xRangeHighEdit.setText('')
-            self.yRangeLowEdit.setText('')
-            self.yRangeHighEdit.setText('')
-            self.zRangeLowEdit.setText('')
-            self.zRangeHighEdit.setText('')
+            for editBox in self.imageNumEditBoxes+tuple(box for boxes in self.rangeEditBoxes for box in boxes):
+                editBox.setText('')
         
     def displayPixelSize(self):
         if len(self.checkedFileIndex[self.selectedWindow])>0:
@@ -509,7 +551,8 @@ class ImageGui():
             isSet = False
             pixIntensityHist = np.zeros(256)
             for i in fileInd:
-                chInd = [ch for ch in self.selectedChannelIndex[self.selectedWindow] if ch<self.imageObjs[i].data.shape[3]]
+                chInd = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannelIndex[self.selectedWindow]
+                chInd = [ch for ch in chInd if ch<self.imageObjs[i].data.shape[3]]
                 if len(chInd)>0:
                     hist,_ = np.histogram(self.imageObjs[i].data[:,:,:,chInd],bins=256,range=(0,256))
                     pixIntensityHist += hist
@@ -544,7 +587,7 @@ class ImageGui():
         self.ignoreImageRangeChange = True
         for window in windows:
             imageShape = self.stitchShape[window] if self.stitchState[window] else self.imageObjs[self.checkedFileIndex[window][0]].data.shape
-            ymax,xmax = [imageShape[i] for i in self.imageShapeIndex[window][:2]]
+            ymax,xmax = [imageShape[i]-1 for i in self.imageShapeIndex[window][:2]]
             self.imageViewBox[window].setLimits(xMin=0,xMax=xmax,yMin=0,yMax=ymax,minXRange=3,maxXRange=xmax,minYRange=3,maxYRange=ymax)
         self.ignoreImageRangeChange = False
         
@@ -563,38 +606,44 @@ class ImageGui():
             width = height
         else:
             top += (height-width)/2
-            height = width
         self.ignoreImageRangeChange = True
         for window in windows:
-            x,y,w,h = left,top,width,height
+            x,y,size = left,top,width
             if len(self.displayedWindows)>1:
-                w /= 2
-                h /= 2
+                size /= 2
                 position = self.displayedWindows.index(window)
                 if len(self.displayedWindows)<3:
-                    x += w/2   
+                    x += size/2   
                 elif position in (2,3):
-                    x += w
+                    x += size
                 if position in (1,3):
-                    y += h
-            yRange,xRange,_ = self.getImageRange(window)
-            aspect = (xRange[1]-xRange[0])/(yRange[1]-yRange[0])
-            if aspect>1:
+                    y += size
+            offset = 0.01*size
+            x += offset
+            y += offset
+            size -= 2*offset
+            yRange,xRange,zRange = [self.imageRange[window][axis] for axis in self.imageShapeIndex[window]]
+            yExtent,xExtent,zExtent = [r[1]-r[0] for r in (yRange,xRange,zRange)]
+            if self.view3dCheckbox.isChecked():
+                maxXYExtent = max(yExtent,xExtent)
+                if maxXYExtent<zExtent:
+                    offset = (size-size*maxXYExtent/zExtent)/2
+                    x += offset
+                    y += offset
+                    size *= maxXYExtent/zExtent
+            aspect = xExtent/yExtent
+            if (len(self.displayedWindows)!=2 and aspect>1) or (len(self.displayedWindows)==2 and aspect<1):
+                w = size
                 h = w/aspect
                 y += (w-h)/2
             else:
+                h = size
                 w = h*aspect
                 x += (h-w)/2
             x,y,w,h = (int(round(n)) for n in (x,y,w,h))
             self.imageViewBox[window].setGeometry(x,y,w,h)
             self.imageViewBox[window].setRange(xRange=xRange,yRange=yRange,padding=0)
         self.ignoreImageRangeChange = False
-        
-    def getImageRange(self,window=None):
-        if window is None:
-            window = self.selectedWindow
-        imageRange = self.stitchRange[self.selectedWindow] if self.stitchState[window] else self.imageObjs[self.checkedFileIndex[window][0]].range
-        return [imageRange[i] for i in self.imageShapeIndex[window]]
         
     def flipImageHorz(self):
         for fileInd in self.selectedFileIndex:
@@ -610,13 +659,16 @@ class ImageGui():
         for window in self.displayedWindows:
             selected = [True if i in self.selectedFileIndex else False for i in self.checkedFileIndex[window]]
             if (self.linkWindowsCheckbox.isChecked() or any(selected)) and not all(selected):
-                return      
+                raise Warning('Must select all images displayed in the same window or in linked windows for rotation')      
         for fileInd in self.selectedFileIndex:
             self.imageObjs[fileInd].rotate90()
         affectedWindows = self.getAffectedWindows()
         if self.stitchCheckbox.isChecked():
+            for window in affectedWindows:
+                self.holdStitchRange = False
             self.updateStitchShape(affectedWindows)
         else:
+            self.setImageRange()
             self.displayImageRange()
             self.setViewBoxRangeLimits(affectedWindows)
             self.setViewBoxRange(affectedWindows)
@@ -631,7 +683,7 @@ class ImageGui():
             self.imageItem[window].setImage(self.image.transpose((1,0,2)),autoLevels=False)
         
     def updateImage(self,window):
-        if self.stitchCheckbox.isChecked():
+        if self.stitchState[window]:
             imageShape = [self.stitchShape[window][i] for i in self.imageShapeIndex[window][:2]]
         else:
             imageShape = [self.imageObjs[self.checkedFileIndex[window][0]].data.shape[i] for i in self.imageShapeIndex[window][:2]]
@@ -665,17 +717,20 @@ class ImageGui():
                 rgb *= 255/rgb.max()
         self.image = rgb.astype(np.uint8)
         for regionInd in self.selectedAtlasRegions[window]:
-            _,contours,_ = cv2.findContours(self.getAtlasRegion(window,self.atlasRegionIDs[regionInd],imageObj.range).copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+            _,contours,_ = cv2.findContours(self.getAtlasRegion(window,self.atlasRegionIDs[regionInd]).copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(self.image,contours,-1,(255,255,255))
                     
     def getChannelData(self,imageObj,fileInd,window,ch):
-        isSlice = True if self.sliceProjState[window]==0 else False
+        isSlice = not self.sliceProjState[window]
         if isSlice:
-            i = self.currentImageNum[window]-1
+            sliceAxis = self.imageShapeIndex[window][2]
+            i = self.imageIndex[window][sliceAxis]
             if self.stitchState[window]:
-                i -= self.stitchPos[window,fileInd][self.imageShapeIndex[window][2]]
-                if not 0<=i<imageObj.data.shape[self.imageShapeIndex[window][2]]:
+                i -= self.stitchPos[window,fileInd,sliceAxis]
+                if not 0<=i<imageObj.data.shape[sliceAxis]:
                     return
+        else:
+            rng = self.imageRange[window]
         if self.xyzState[window]==2:
             if isSlice:
                 channelData = imageObj.data[:,:,i,ch]
@@ -683,7 +738,7 @@ class ImageGui():
                 if self.stitchCheckbox.isChecked():
                     channelData = imageObj.data[:,:,:,ch].max(axis=2)
                 else:
-                    channelData = imageObj.data[:,:,imageObj.range[2][0]:imageObj.range[2][1],ch].max(axis=2)
+                    channelData = imageObj.data[:,:,rng[2][0]:rng[2][1]+1,ch].max(axis=2)
         elif self.xyzState[window]==1:
             if isSlice:
                 channelData = imageObj.data[i,:,:,ch].T
@@ -691,7 +746,7 @@ class ImageGui():
                 if self.stitchState[window]:
                     channelData = imageObj.data[:,:,:,ch].max(axis=0).T
                 else:
-                    channelData = imageObj.data[imageObj.range[0][0]:imageObj.range[0][1],:,:,ch].max(axis=0).T
+                    channelData = imageObj.data[rng[0][0]:rng[0][1]+1,:,:,ch].max(axis=0).T
         else:
             if isSlice:
                 channelData = imageObj.data[:,i,:,ch]
@@ -699,7 +754,7 @@ class ImageGui():
                 if self.stitchState[window]:
                     channelData = imageObj.data[:,:,:,ch].max(axis=1)
                 else:
-                    channelData = imageObj.data[:,imageObj.range[1][0]:imageObj.range[1][1],:,ch].max(axis=1)
+                    channelData = imageObj.data[:,rng[1][0]:rng[1][1]+1,:,ch].max(axis=1)
         channelData = channelData.astype(float)
         if imageObj.levels[ch][0]>0 or imageObj.levels[ch][1]<255:
             channelData -= imageObj.levels[ch][0] 
@@ -708,29 +763,30 @@ class ImageGui():
             channelData[channelData>255] = 255
         return channelData
         
-    def getAtlasRegion(self,window,region,rng):
-        isSlice = True if self.sliceProjState[window]==0 else False
-        i = self.currentImageNum[window]-1
+    def getAtlasRegion(self,window,region):
+        isSlice = not self.sliceProjState[window]
+        i = self.imageIndex[window][self.imageShapeIndex[window][2]]
+        rng = self.imageRange[window]
         if self.xyzState[window]==2:
             if isSlice:
                 a = self.atlasAnnotationData[:,:,i]
                 a = np.in1d(a,region).reshape(a.shape)
             else:
-                a = self.atlasAnnotationData[:,:,rng[2][0]:rng[2][1]]
+                a = self.atlasAnnotationData[:,:,rng[2][0]:rng[2][1]+1]
                 a = np.in1d(a,region).reshape(a.shape).max(axis=2)
         elif self.xyzState[window]==1:
             if isSlice:
                 a = self.atlasAnnotationData[i,:,:].T
                 a = np.in1d(a,region).reshape(a.shape)
             else:
-                a = self.atlasAnnotationData[rng[0][0]:rng[0][1],:,:]
+                a = self.atlasAnnotationData[rng[0][0]:rng[0][1]+1,:,:]
                 a = np.in1d(a,region).reshape(a.shape).max(axis=0).T
         else:
             if isSlice:
                 a = self.atlasAnnotationData[:,i,:]
                 a = np.in1d(a,region).reshape(a.shape)
             else:
-                a = self.atlasAnnotationData[:,rng[1][0]:rng[1][1],:]
+                a = self.atlasAnnotationData[:,rng[1][0]:rng[1][1]+1,:]
                 a = np.in1d(a,region).reshape(a.shape).max(axis=1)
         return a
         
@@ -748,24 +804,32 @@ class ImageGui():
         self.selectedAtlasRegions[self.selectedWindow] = []
         for ind,region in enumerate(self.atlasRegionMenu):
             if region.isChecked():
-                self.selectedAtlasRegions[self.selectedWindow].append(ind)
-        self.displayImage()
+                windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindows]
+                for window in windows:
+                    self.selectedAtlasRegions[window].append(ind)
+        self.displayImage(windows)
         
-    def clearAtlasRegions(self):
+    def clearAtlasRegions(self,updateImage=True):
         if len(self.selectedAtlasRegions[self.selectedWindow])>0:
             for region in self.atlasRegionMenu:
                 if region.isChecked():
                     region.setChecked(False)
-            self.selectedAtlasRegions[self.selectedWindow] = []
-            self.displayImage()
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindows]
+            for window in windows:
+                self.selectedAtlasRegions[window] = []
+            if updateImage:
+                self.displayImage(windows)
         
     def mainWinKeyPressCallback(self,event):
         key = event.key()
         modifiers = QtGui.QApplication.keyboardModifiers()
-        if key==44 and self.sliceButton.isChecked(): # <
-            self.setImageNum(self.currentImageNum[self.selectedWindow]-1)
-        elif key==46 and self.sliceButton.isChecked(): # >
-            self.setImageNum(self.currentImageNum[self.selectedWindow]+1)
+        if key in (44,46) and self.sliceButton.isChecked() and not self.view3dCheckbox.isChecked():
+            axis = self.imageShapeIndex[self.selectedWindow][2]
+            imgInd = self.imageIndex[self.selectedWindow][axis]
+            if key==44: # <
+                self.setImageNum(axis,imgInd-1)
+            else: # >
+                self.setImageNum(axis,imgInd+1)
         elif self.stitchCheckbox.isChecked():
             if int(modifiers & QtCore.Qt.ShiftModifier)>0:
                 move = 100
@@ -773,23 +837,43 @@ class ImageGui():
                 move = 10
             else:
                 move = 1
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindows]
             fileInd = list(set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex))
             if key==16777235: # up
-                self.stitchPos[self.selectedWindow,fileInd,0] -= move
+                self.stitchPos[windows,fileInd,0] -= move
             elif key==16777237: # down
-                self.stitchPos[self.selectedWindow,fileInd,0] += move
+                self.stitchPos[windows,fileInd,0] += move
             elif key==16777234: # left
-                self.stitchPos[self.selectedWindow,fileInd,1] -= move
+                self.stitchPos[windows,fileInd,1] -= move
             elif key==16777236: # right
-                self.stitchPos[self.selectedWindow,fileInd,1] += move
+                self.stitchPos[windows,fileInd,1] += move
             elif key==61: # plus
-                self.stitchPos[self.selectedWindow,fileInd,2] -= move
+                self.stitchPos[windows,fileInd,2] -= move
             elif key==45: # minus
-                self.stitchPos[self.selectedWindow,fileInd,2] += move
+                self.stitchPos[windows,fileInd,2] += move
             else:
                 return
-            self.updateStitchShape()
-            self.displayImage()
+            self.updateStitchShape(windows)
+            self.displayImage(windows)
+            
+    def window1MouseClickCallback(self,event):
+        self.imageMouseClickCallback(event,window=0)
+    
+    def window2MouseClickCallback(self,event):
+        self.imageMouseClickCallback(event,window=1)
+        
+    def window3MouseClickCallback(self,event):
+        self.imageMouseClickCallback(event,window=2)
+        
+    def window4MouseClickCallback(self,event):
+        self.imageMouseClickCallback(event,window=3)
+            
+    def imageMouseClickCallback(self,event,window):
+        if event.button()==QtCore.Qt.LeftButton and self.view3dCheckbox.isChecked():
+            x,y = int(event.pos().x()),int(event.pos().y())
+            for line,pos in zip(self.view3dSliceLines[window],(y,x)):
+                line.setValue(pos)
+            self.updateView3dLines(axes=self.imageShapeIndex[window][:2],position=(y,x))
         
     def fileListboxSelectionCallback(self):
         self.selectedFileIndex = getSelectedItemsIndex(self.fileListbox)
@@ -798,40 +882,51 @@ class ImageGui():
     def fileListboxItemClickedCallback(self,item):
         fileInd = self.fileListbox.indexFromItem(item).row()
         checked = self.checkedFileIndex[self.selectedWindow]
+        windows = self.displayedWindows if self.viewChannelsCheckbox.isChecked() or self.view3dCheckbox.isChecked() else [self.selectedWindow]
         if item.checkState()==QtCore.Qt.Checked and fileInd not in checked:
-            if not self.stitchCheckbox.isChecked() and len(checked)>0 and self.imageObjs[fileInd].data.shape[:3]!=self.imageObjs[checked[0]].data.shape[:3]:
+            if not self.stitchCheckbox.isChecked() and (len(checked)>0 or self.linkWindowsCheckbox.isChecked()) and self.imageObjs[fileInd].data.shape[:3]!=self.imageObjs[checked[0]].data.shape[:3]:
                 item.setCheckState(QtCore.Qt.Unchecked)
+                raise Warning('Images displayed in the same window or linked windows must be the same shape unless stitching')
+            checked.append(fileInd)
+            checked.sort()
+            if len(checked)>1:
+                if self.imageObjs[fileInd].data.shape[3]>self.channelListbox.count():
+                    self.updateChannelList()
+                    if self.viewChannelsCheckbox.isChecked():
+                        self.setViewChannelsOn()
             else:
-                checked.append(fileInd)
-                checked.sort()
+                self.displayedWindows.append(self.selectedWindow)
+                self.displayedWindows.sort()
+            if self.stitchCheckbox.isChecked():
+                self.stitchPos[windows,fileInd,:] = 0
+                self.updateStitchShape(windows)
+                self.displayImageLevels()
+                self.displayImage(windows)
+            else:
                 if len(checked)>1:
-                    if self.imageObjs[fileInd].data.shape[3]>self.channelListbox.count():
-                        self.updateChannelList()
-                else:
-                    self.displayedWindows.append(self.selectedWindow)
-                    self.displayedWindows.sort()
-                if self.stitchCheckbox.isChecked():
-                    self.stitchPos[self.selectedWindow,fileInd,:] = 0
-                    self.updateStitchShape()
                     self.displayImageLevels()
-                    self.displayImage()
+                    self.displayImage(windows)
+                elif self.view3dCheckbox.isChecked():
+                    self.setView3dOn()
                 else:
-                    if len(checked)>1:
-                        self.imageObjs[fileInd].range = self.imageObjs[checked[0]].range[:]
-                        self.displayImageLevels()
-                        self.displayImage()
-                    else:
-                        self.initImageWindow()
+                    self.initImageWindow()
         else:
             if fileInd in checked:
                 checked.remove(fileInd)
                 if len(checked)<1:
+                    if self.viewChannelsCheckbox.isChecked():
+                        self.setViewChannelsOff()
+                    elif self.view3dCheckbox.isChecked():
+                        self.setView3dOff()
                     self.resetImageWindow()
-                elif self.stitchCheckbox.isChecked():
-                    self.stitchPos[self.selectedWindow,fileInd,:] = np.nan
-                    self.updateStitchShape()
-                    self.displayImageLevels()
-                    self.displayImage()                    
+                else:
+                    self.updateChannelList()
+                    if fileInd in self.selectedFileIndex:
+                        self.displayImageLevels()
+                    if self.stitchCheckbox.isChecked():
+                        self.stitchPos[windows,fileInd,:] = np.nan
+                        self.updateStitchShape(windows)
+                    self.displayImage(windows)                    
                     
     def moveFileDownButtonCallback(self):
         for i,fileInd in reversed(list(enumerate(self.selectedFileIndex))):
@@ -848,6 +943,8 @@ class ImageGui():
                     elif fileInd+1 in checked:
                         checked[checked.index(fileInd+1)] -= 1
                 self.imageObjs[fileInd],self.imageObjs[fileInd+1] = self.imageObjs[fileInd+1],self.imageObjs[fileInd]
+                if self.stitchCheckbox.isChecked():
+                    self.stitchPos[:,[fileInd,fileInd+1]] = self.stitchPos[:,[fileInd+1,fileInd]]
         self.displayImage(self.getAffectedWindows())
     
     def moveFileUpButtonCallback(self):
@@ -865,67 +962,88 @@ class ImageGui():
                     elif fileInd-1 in checked:
                         checked[checked.index(fileInd-1)] += 1
                 self.imageObjs[fileInd-1],self.imageObjs[fileInd] = self.imageObjs[fileInd],self.imageObjs[fileInd-1]
+                if self.stitchCheckbox.isChecked():
+                    self.stitchPos[:,[fileInd-1,fileInd]] = self.stitchPos[:,[fileInd,fileInd-1]]
         self.displayImage(self.getAffectedWindows())
     
     def removeFileButtonCallback(self):
-        affectedWindows = self.getAffectedWindows()
-        if self.stitchCheckbox.isChecked():
-            self.stitchPos = np.delete(self.stitchPos,self.selectedFileIndex,axis=1)
+        windows = self.getAffectedWindows()
         for fileInd in reversed(self.selectedFileIndex):
             for checked in self.checkedFileIndex:
                 if fileInd in checked:
                     checked.remove(fileInd)
             self.imageObjs.remove(self.imageObjs[fileInd])
             self.fileListbox.takeItem(fileInd)
+        if self.stitchCheckbox.isChecked():
+            self.stitchPos = np.delete(self.stitchPos,self.selectedFileIndex,axis=1)
+            self.updateStitchShape(windows)
         self.selectedFileIndex = []
         if len(self.checkedFileIndex[self.selectedWindow])<1:
+            if self.viewChannelsCheckbox.isChecked():
+                self.setViewChannelsOff()
+            elif self.view3dCheckbox.isChecked():
+                self.setView3dOff()
             self.resetImageWindow()
         else:
             self.updateChannelList()
             self.displayImageLevels()
-            self.displayImage(affectedWindows)
+            self.displayImage(windows)
             
     def stitchCheckboxCallback(self):
         if self.stitchCheckbox.isChecked():
-            if self.linkCheckebox.isChecked():
+            if self.linkWindowsCheckbox.isChecked():
+                if not (self.viewChannelsCheckbox.isChecked or self.view3dCheckbox.isChecked()):
+                    self.stitchCheckbox.setChecked(False)
+                    raise Warning('Stitching can not be initiated while link windows mode is on unless channel view or view 3D is selected')
+                windows = self.displayedWindows
+            elif len(self.selectedFileIndex)<1:
                 self.stitchCheckbox.setChecked(False)
+                return
             else:
-                self.stitchState[self.selectedWindow] = True
                 for i in range(self.fileListbox.count()):
                     if i in self.selectedFileIndex:
                         self.fileListbox.item(i).setCheckState(QtCore.Qt.Checked)
                     else:
                         self.fileListbox.item(i).setCheckState(QtCore.Qt.Unchecked)
-                self.checkedFileIndex = self.selectedFileIndex[:]
-                self.stitchPos = np.full((4,self.fileListbox.count(),3),np.nan)
-                useStagePos = all([self.imageObjs[i].position is not None for i in self.selectedFileIndex])
-                col = 0
-                pos = [0,0,0]
-                for i in self.selectedFileIndex:
-                    if useStagePos:
-                        self.stitchPos[self.selectedWindow,i,:] = self.imageObjs[i].position
-                    else:
-                        if col>math.floor(len(self.selectedFileIndex)**0.5):
-                            col = 0
-                            pos[0] += self.imageObjs[i].data.shape[0]
-                            pos[1] = 0
-                        elif col>0:
-                            pos[1] += self.imageObjs[i].data.shape[1]
-                        col += 1
-                        self.stitchPos[self.selectedWindow,i,:] = pos
-                self.stitchShape = [None for _ in range(4)]
-                self.stitchRange = [[] for _ in range(4)]
-                self.holdStitchRange = False
-                self.updateStitchShape()
-                self.displayImageLevels()
-                self.displayImage()
+                self.checkedFileIndex[self.selectedWindow] = self.selectedFileIndex[:]
+                windows = [self.selectedWindow]
+            self.stitchPos[self.selectedWindow] = np.nan
+            useStagePos = all([self.imageObjs[i].position is not None for i in self.selectedFileIndex])
+            col = 0
+            pos = [0,0,0]
+            for i in self.selectedFileIndex:
+                if useStagePos:
+                    self.stitchPos[self.selectedWindow,i,:] = self.imageObjs[i].position
+                else:
+                    if col>math.floor(len(self.selectedFileIndex)**0.5):
+                        col = 0
+                        pos[0] += self.imageObjs[i].data.shape[0]
+                        pos[1] = 0
+                    elif col>0:
+                        pos[1] += self.imageObjs[i].data.shape[1]
+                    col += 1
+                    self.stitchPos[self.selectedWindow,i,:] = pos
+            for window in windows:
+                self.stitchState[window] = True
+                self.holdStitchRange[window] = False
+                if window!=self.selectedWindow:
+                    self.stitchPos[window] = self.stitchPos[self.selectedWindow]
+            self.updateStitchShape(windows)
+            self.displayImageLevels()
+            self.displayImage(windows)
         else:
-            self.stitchState[self.selectedWindow] = True
-            for i in self.checkedFileIndex[self.selectedWindow][1:]:
-                self.fileListbox.item(i).setCheckState(QtCore.Qt.Unchecked)
-            for window in self.displayedWindows:
-                del(self.checkedFileIndex[self.selectedWindow][1:])
-            self.initImageWindow()
+            self.stitchState[self.selectedWindow] = False
+            if len(self.checkedFileIndex[self.selectedWindow])>1:
+                for i in self.checkedFileIndex[self.selectedWindow][1:]:
+                    self.fileListbox.item(i).setCheckState(QtCore.Qt.Unchecked)
+            if self.viewChannelsCheckbox.isChecked() or self.view3dCheckbox.isChecked():
+                self.displayImageInfo()
+                if self.viewChannelsCheckbox.isChecked():
+                    self.setViewChannelsOn()
+                else:
+                    self.setView3dOn()
+            else:
+                self.initImageWindow()
     
     def updateStitchShape(self,windows=None):
         if windows is None:
@@ -934,29 +1052,18 @@ class ImageGui():
             self.stitchPos[window] -= np.nanmin(self.stitchPos[window],axis=0)
             imageShapes = np.array([self.imageObjs[i].data.shape[0:3] for i in self.checkedFileIndex[window]])
             self.stitchShape[window] = (self.stitchPos[self.selectedWindow,self.checkedFileIndex[window],:]+imageShapes).max(axis=0)
-            if self.holdStitchRange:
-                for i in (0,1,2):
-                    if self.stitchRange[window][i][1]>self.stitchShape[window][i]:
-                        self.stitchRange[window][i][1] = self.stitchShape[window][i]
+            if self.holdStitchRange[window]:
+                for axis in (0,1,2):
+                    if self.imageRange[window][axis][1]>=self.stitchShape[window][axis]-1:
+                        self.setImageRange(axes=[axis],rangeInd=1,window=window)
             else:
-                self.stitchRange[window] = [[0,self.stitchShape[window][i]] for i in (0,1,2)]
+                self.setImageRange(window=window)
         self.setViewBoxRangeLimits(windows)
         self.setViewBoxRange(windows)
         self.displayImageRange()
-        
-    def viewChannelsCheckboxCallback(self):
-        pass
-    
-    def view3DCheckboxCallback(self):
-        pass
-        
-    def getAffectedWindows(self,chInd=None):
-        if chInd is not None:
-            chInd = self.selectedChannelIndex[self.selectedWindow]
-        return [window for window in self.displayedWindows if any(i in self.selectedFileIndex for i in self.checkedFileIndex[window]) and (chInd is None or any(ch in chInd for ch in self.selectedChannelIndex[window]))]
             
     def windowListboxCallback(self):
-        self.selectedWindow = getSelectedItemsIndex(self.windowListbox)[0]
+        self.selectedWindow = self.windowListbox.currentRow()
         for i in range(self.fileListbox.count()):
             if i in self.checkedFileIndex[self.selectedWindow]:
                 self.fileListbox.item(i).setCheckState(QtCore.Qt.Checked)
@@ -973,23 +1080,28 @@ class ImageGui():
         if self.linkWindowsCheckbox.isChecked():
             if self.stitchCheckbox.isChecked():
                 self.linkWindowsCheckbox.setChecked(False)
-            elif len(self.displayedWindows)>1:
+                raise Warning('Linking windows is not allowed while stitch mode is on unless channel view or 3D view is selected')
+            if len(self.displayedWindows)>1:
                 imageObj = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]]
-                otherWindows = self.displayedWindows[:]
-                otherWindows.remove(self.selectedWindow)
+                otherWindows = [w for w in self.displayedWindows if w!=self.selectedWindow]
                 if any(self.imageObjs[self.checkedFileIndex[window][0]].data.shape[:3]!=imageObj.data.shape[:3] for window in otherWindows):
-                    return
-                else:
-                    for window in otherWindows:
-                        for i in self.checkedFileIndex[window]:
-                            self.imageObjs[i].range = imageObj.range[:]
-                self.setViewBoxRange()
-                self.displayImage()
+                    self.linkWindowsCheckbox.setChecked(False)
+                    raise Warning('Image shapes must be equal when linking windows')
+                for window in otherWindows:
+                    self.imageRange[window] = self.imageRange[self.selectedWindow][:]
+                self.setViewBoxRange(self.displayedWindows)
+                
+    def getAffectedWindows(self,chInd=None):
+        return [window for window in self.displayedWindows if any(i in self.selectedFileIndex for i in self.checkedFileIndex[window]) and (chInd is None or any(ch in chInd for ch in self.selectedChannelIndex[window]))]
         
     def channelListboxCallback(self):
-        self.selectedChannelIndex[self.selectedWindow] = getSelectedItemsIndex(self.channelListbox)
-        self.displayImageLevels()
-        self.displayImage()
+        if self.viewChannelsCheckbox.isChecked():
+            self.viewChannelsSelectedCh = self.channelListbox.currentRow()
+            self.displayImageLevels()
+        else:
+            self.selectedChannelIndex[self.selectedWindow] = getSelectedItemsIndex(self.channelListbox)
+            self.displayImageLevels()
+            self.displayImage()
         
     def updateChannelList(self):
         self.channelListbox.blockSignals(True)
@@ -1016,39 +1128,22 @@ class ImageGui():
                 rgbInd = (0,2)
             else: # Gray
                 rgbInd = (0,1,2)
+            chInd = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannelIndex[self.selectedWindow]
             for fileInd in self.selectedFileIndex:
-                for ch in self.selectedChannelIndex[self.selectedWindow]:
+                for ch in chInd:
                     if ch<self.imageObjs[fileInd].data.shape[3]:
                         self.imageObjs[fileInd].rgbInd[ch] = rgbInd
-            self.displayImage(self.getAffectedWindows(chInd=True))
-        
-    def imageNumEditCallback(self):
-        self.setImageNum(int(self.imageNumEdit.text()))
-        
-    def setImageNum(self,imageNum):
-        imageShape = self.stitchShape[self.selectedWindow] if self.stitchCheckbox.isChecked() else self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].data.shape
-        if imageNum<1:
-            imageNum = 1
-        elif imageNum>imageShape[self.imageShapeIndex[self.selectedWindow][2]]:
-            imageNum = imageShape[self.imageShapeIndex[self.selectedWindow][2]]
-        self.imageNumEdit.setText(str(imageNum))
-        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
-        for window in windows:
-            self.currentImageNum[window] = imageNum
-        self.displayImage(windows)
+            self.displayImage(self.getAffectedWindows(chInd))
         
     def sliceProjButtonCallback(self):
-        if self.sliceButton.isChecked():
-            self.imageNumEdit.setEnabled(True)
-            self.imageNumEdit.setText(str(self.currentImageNum[self.selectedWindow]))
-            state = 0
-        else:
-            self.imageNumEdit.setEnabled(False)
-            self.imageNumEdit.setText('')
-            state = 1
+        isSlice = self.sliceButton.isChecked()
+        if self.view3dCheckbox.isChecked():
+            for windowLines in self.view3dSliceLines:
+                for line in windowLines:
+                    line.setVisible(isSlice)
         windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
         for window in windows:
-            self.sliceProjState[window] = state
+            self.sliceProjState[window] = int(not isSlice)
         self.displayImage(windows)
     
     def xyzButtonCallback(self):
@@ -1063,160 +1158,274 @@ class ImageGui():
             shapeInd = (0,2,1)
         windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
         for window in windows:
-            self.sliceProjState[window] = state
+            self.xyzState[window] = state
             self.imageShapeIndex[window] = shapeInd
-            self.currentImageNum[window] = 1
-        if self.sliceButton.isChecked():
-            self.imageNumEdit.setText('1')
         self.setViewBoxRangeLimits(windows)
         self.setViewBoxRange(windows)
         self.displayImage(windows)
         
+    def viewChannelsCheckboxCallback(self):
+        if len(self.checkedFileIndex[self.selectedWindow])>0:
+            if self.viewChannelsCheckbox.isChecked():
+                if self.view3dCheckbox.isChecked():
+                    self.setView3dOff()
+                self.setViewChannelsOn()
+            else:
+                self.setViewChannelsOff()
+                
+    def setViewChannelsOn(self):
+        self.viewChannelsCheckbox.setChecked(True)
+        self.channelListbox.blockSignals(True)
+        self.viewChannelsSelectedCh = self.selectedChannelIndex[self.selectedWindow][0]
+        self.channelListbox.setCurrentRow(self.viewChannelsSelectedCh)
+        self.channelListbox.setSelectionMode(QtGui.QAbstractItemView.SingleSelection)
+        self.channelListbox.blockSignals(False)
+        numCh = min(4,max(self.imageObjs[i].data.shape[3] for i in self.checkedFileIndex[self.selectedWindow]))
+        self.selectedChannelIndex[:numCh] = [[ch] for ch in range(numCh)]
+        for window in range(numCh):
+            self.xyzState[window] = self.xyzState[self.selectedWindow]
+            self.imageShapeIndex[window] = self.imageShapeIndex[self.selectedWindow]
+            self.imageIndex[window] = self.imageIndex[self.selectedWindow]
+        self.setLinkedViewOn(numWindows=numCh)
+        
+    def setViewChannelsOff(self):
+        self.viewChannelsCheckbox.setChecked(False)
+        self.channelListbox.setSelectionMode(QtGui.QAbstractItemView.ExtendedSelection)
+        self.setLinkedViewOff()
+    
+    def view3dCheckboxCallback(self):
+        if len(self.checkedFileIndex[self.selectedWindow])>0:
+            if self.view3dCheckbox.isChecked():
+                if self.viewChannelsCheckbox.isChecked():
+                    self.setViewChannelsOff()
+                self.setView3dOn()
+            else:
+                self.setView3dOff()
+            
+    def setView3dOn(self):
+        self.view3dCheckbox.setChecked(True)
+        self.xyzGroupBox.setEnabled(False)
+        self.selectedChannelIndex[:3] = [self.selectedChannelIndex[self.selectedWindow] for _ in range(3)]
+        self.xyzState[:3] = [2,1,0]
+        self.imageShapeIndex[:3] = [(0,1,2),(2,1,0),(0,2,1)]
+        self.imageIndex[:3] = [[(r[1]-r[0])//2 for r in self.imageRange[0]] for _ in range(3)]
+        for i,editBox in enumerate(self.imageNumEditBoxes):
+            editBox.setText(str(self.imageIndex[self.selectedWindow][i]))
+        isSlice = self.sliceButton.isChecked()
+        for window in self.displayedWindows:
+            for line,ax in zip(self.view3dSliceLines[window],self.imageShapeIndex[window][:2]):
+                line.setValue(self.imageIndex[window][ax])
+                line.setBounds(self.imageRange[window][ax])
+                line.setVisible(isSlice)
+                self.imageViewBox[window].addItem(line)
+        self.setLinkedViewOn(numWindows=3)
+            
+    def setView3dOff(self):
+        self.view3dCheckbox.setChecked(False)
+        for window in self.displayedWindows:
+            for line in self.view3dSliceLines[window]:
+                self.imageViewBox[window].removeItem(line)
+        self.xyzGroupBox.setEnabled(True)
+        self.setLinkedViewOff()
+        
+    def view3dSliceLineDragged(self):
+        source = self.mainWin.sender()
+        for window,lines in enumerate(self.view3dSliceLines):
+            if source in lines:
+                axis = self.imageShapeIndex[window][lines.index(source)]
+                break 
+        self.updateView3dLines([axis],[int(source.value())])
+        
+    def updateView3dLines(self,axes,position):
+        for window in self.displayedWindows:
+            shapeInd = self.imageShapeIndex[window][:2]
+            for axis,pos in zip(axes,position):
+                if axis in shapeInd:
+                    self.view3dSliceLines[window][shapeInd.index(axis)].setValue(pos)
+                elif position is not None:
+                    self.imageNumEditBoxes[axis].setText(str(pos+1))
+                    self.imageIndex[window][axis] = pos
+                    self.displayImage([window])
+                    
+    def setLinkedViewOn(self,numWindows):
+        self.windowListbox.blockSignals(True)
+        self.windowListbox.setCurrentRow(0)
+        self.windowListbox.blockSignals(False)
+        self.windowListbox.setEnabled(False)
+        self.linkWindowsCheckbox.setEnabled(False)
+        self.linkWindowsCheckbox.setChecked(True)
+        for window in range(numWindows):
+            self.checkedFileIndex[window] = self.checkedFileIndex[self.selectedWindow]
+            self.sliceProjState[window] = self.sliceProjState[self.selectedWindow]
+            self.imageRange[window] = self.imageRange[self.selectedWindow]
+            self.normState[window] = self.normState[self.selectedWindow]
+            self.stitchState[window] = self.stitchState[self.selectedWindow]
+            self.selectedAtlasRegions[window] = self.selectedAtlasRegions[self.selectedWindow]
+        if self.stitchState[self.selectedWindow]:
+            self.stitchPos[:numWindows] = self.stitchPos[self.selectedWindow]
+            self.stitchShape[:numWindows] = [self.stitchShape[self.selectedWindow] for _ in range(numWindows)]
+        for window in self.displayedWindows:
+            if window>numWindows-1:
+                self.resetImageWindow(window)
+        self.selectedWindow = 0
+        self.displayedWindows = list(range(numWindows))
+        self.setViewBoxRangeLimits(self.displayedWindows)
+        self.setViewBoxRange(self.displayedWindows)
+        self.displayImage(self.displayedWindows)
+        isZoom = self.zoomPanButton.isChecked()
+        for window in self.displayedWindows:
+            self.imageViewBox[window].setMouseEnabled(x=isZoom,y=isZoom)
+            
+    def setLinkedViewOff(self):
+        if len(self.displayedWindows)>1:
+            for window in self.displayedWindows[1:]:
+                self.checkedFileIndex[window] = []
+                self.resetImageWindow(window)
+        self.windowListbox.setEnabled(True)
+        self.linkWindowsCheckbox.setChecked(False)
+        self.linkWindowsCheckbox.setEnabled(True)
+        self.setViewBoxRange()
+        
+    def imageNumEditCallback(self):
+        self.setImageNum(axis=self.imageNumEditBoxes.index(self.mainWin.sender()))
+        
+    def setImageNum(self,axis,imgInd=None):
+        if imgInd is None:
+            imgInd = int(self.imageNumEditBoxes[axis].text())-1
+        if imgInd<self.imageRange[self.selectedWindow][axis][0]:
+            imgInd = self.imageRange[self.selectedWindow][axis][0]
+        elif imgInd>self.imageRange[self.selectedWindow][axis][1]:
+            imgInd = self.imageRange[self.selectedWindow][axis][1]
+        if self.view3dCheckbox.isChecked():
+            self.updateView3dLines([axis],[imgInd])
+        else:
+            self.imageNumEditBoxes[axis].setText(str(imgInd+1))
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+            for window in windows:
+                self.imageIndex[window][axis] = imgInd
+            self.displayImage(windows)
+            
     def zoomPanButtonCallback(self):
         isOn = self.zoomPanButton.isChecked()
         for window in self.displayedWindows:
             self.imageViewBox[window].setMouseEnabled(x=isOn,y=isOn)
         
     def resetViewButtonCallback(self):
-        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
-        if self.stitchCheckbox.isChecked():
-            shape = self.stitchShape[self.selectedWindow]
-            self.stitchRange[self.selectedWindow] = [[0,shape[i]] for i in (0,1,2)]
-            self.holdStitchRange = False
-        else:
-            shape = self.imageObjs[self.checkedFileIndex[self.selectedWindow]].data.shape
-            for fileInd in (set().union(*(self.checkedFileIndex[window] for window in windows)) | set(self.selectedFileIndex)):
-                self.imageObjs[fileInd].range = [[0,shape[i]] for i in (0,1,2)]
-        self.xRangeLowEdit.setText('1')
-        self.xRangeHighEdit.setText(str(shape[1]))
-        self.yRangeLowEdit.setText('1')
-        self.yRangeHighEdit.setText(str(shape[0]))
-        self.zRangeLowEdit.setText('1')
-        self.zRangeHighEdit.setText(str(shape[2]))
-        self.setViewBoxRange()
-        if self.projectionButton.isChecked():
-            self.displayImage(windows)
+        imageShape = self.stitchShape[self.selectedWindow] if self.stitchState[self.selectedWindow] else self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].data.shape
+        for editBox,size in zip(self.rangeEditBoxes,imageShape):
+            editBox[0].setText('1')
+            editBox[1].setText(str(size))
+        self.setImageRange()
         
-    def xRangeLowEditCallback(self):
-        self.updateImageRange('low',self.xRangeLowEdit,self.xRangeHighEdit,self.xButton,axisInd=1)
-            
-    def xRangeHighEditCallback(self):
-        self.updateImageRange('high',self.xRangeLowEdit,self.xRangeHighEdit,self.xButton,axisInd=1)
-        
-    def yRangeLowEditCallback(self):
-        self.updateImageRange('low',self.yRangeLowEdit,self.yRangeHighEdit,self.yButton,axisInd=0)
-            
-    def yRangeHighEditCallback(self):
-        self.updateImageRange('high',self.yRangeLowEdit,self.yRangeHighEdit,self.yButton,axisInd=0)
-        
-    def zRangeLowEditCallback(self):
-        self.updateImageRange('low',self.zRangeLowEdit,self.zRangeHighEdit,self.zButton,axisInd=2)
-            
-    def zRangeHighEditCallback(self):
-        self.updateImageRange('high',self.zRangeLowEdit,self.zRangeHighEdit,self.zButton,axisInd=2)
-            
-    def updateImageRange(self,lowHigh,lowEdit,highEdit,axisButton,axisInd):
-        if lowHigh=='low':
-            newVal = int(lowEdit.text())
-            axMax = int(highEdit.text())
-            if newVal<1:
-                newVal = 1
-            elif newVal>=axMax-1:
-                newVal = axMax-1
-            lowEdit.setText(str(newVal))
-            rangeInd = 0
+    def rangeEditCallback(self):
+        source = self.mainWin.sender()
+        for axis,boxes in enumerate(self.rangeEditBoxes):
+            if source in boxes:
+                rangeInd = boxes.index(source)
+                break
+        if rangeInd==0:
+            newVal = int(self.rangeEditBoxes[axis][0].text())-1
+            axMin = 0
+            axMax = int(self.rangeEditBoxes[axis][1].text())-2
         else:
-            newVal = int(highEdit.text())
-            axMin = int(lowEdit.text())
-            axMax = self.stitchShape[self.selectedWindow][axisInd] if self.stitchCheckbox.isChecked() else self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].data.shape[axisInd]
-            if newVal<=axMin:
-                newVal = axMin+1
-            elif newVal>axMax:
-                newVal = axMax
-            highEdit.setText(str(newVal))
-            rangeInd = 1
-        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
-        if self.stitchCheckbox.isChecked():
-            self.setImageRange(self.stitchRange[self.selectedWindow],self.stitchShape[self.selectedWindow],newVal,axisInd,rangeInd)
-            self.holdStitchRange = True
-        else:
-            for fileInd in set().union(*(self.checkedFileIndex[window] for window in windows)):
-                self.setImageRange(self.imageObjs[fileInd].range,self.imageObjs[fileInd].data.shape,newVal,axisInd,rangeInd)
-        if axisButton.isChecked:
-            if self.projectionButton.isChecked():
-                self.displayImage(windows)
-        else:
-            self.setViewBoxRange(windows)
+            newVal = int(self.rangeEditBoxes[axis][1].text())-1
+            axMin = int(self.rangeEditBoxes[axis][0].text())
+            axMax = self.stitchShape[self.selectedWindow][axis]-1 if self.stitchCheckbox.isChecked() else self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].data.shape[axis]-1
+        if newVal<axMin:
+            newVal = axMin
+        elif newVal>axMax:
+            newVal = axMax
+        self.rangeEditBoxes[axis][rangeInd].setText(str(newVal+1))
+        self.setImageRange([newVal],[axis],rangeInd)
         
     def imageRangeChanged(self):
-        if len(self.imageObjs)<1 or self.ignoreImageRangeChange:
+        if len(self.displayedWindows)<1 or self.ignoreImageRangeChange:
             return
-        newRange = [[int(round(n)) for n in x] for x in reversed(self.imageViewBox[self.selectedWindow].viewRange())]
-        if self.zButton.isChecked():
-            self.xRangeLowEdit.setText(str(newRange[1][0]+1))
-            self.xRangeHighEdit.setText(str(newRange[1][1]))
-            self.yRangeLowEdit.setText(str(newRange[0][0]+1))
-            self.yRangeHighEdit.setText(str(newRange[0][1]))
-        elif self.yButton.isChecked():
-            self.xRangeLowEdit.setText(str(newRange[1][0]+1))
-            self.xRangeHighEdit.setText(str(newRange[1][1]))
-            self.zRangeLowEdit.setText(str(newRange[0][0]+1))
-            self.zRangeHighEdit.setText(str(newRange[0][1]))
-        else:
-            self.zRangeLowEdit.setText(str(newRange[1][0]+1))
-            self.zRangeHighEdit.setText(str(newRange[1][1]))
-            self.yRangeLowEdit.setText(str(newRange[0][0]+1))
-            self.yRangeHighEdit.setText(str(newRange[0][1]))
-        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
-        if self.stitchCheckbox.isChecked():
-            self.setImageRange(self.stitchRange[self.selectedWindow],self.stitchShape[self.selectedWindow],newRange,self.imageShapeIndex[self.selectedWindow][:2])
-            self.holdStitchRange = True
-        else:
-            for fileInd in set().union(*(self.checkedFileIndex[window] for window in windows)):
-                self.setImageRange(self.imageObjs[fileInd].range,self.imageObjs[fileInd].data.shape,newRange,self.imageShapeIndex[self.selectedWindow][:2])
-        self.setViewBoxRange(windows)
+        window = self.imageViewBox.index(self.mainWin.sender())
+        newRange = [[int(i) for i in r] for r in reversed(self.imageViewBox[window].viewRange())]
+        axes = self.imageShapeIndex[window][:2]
+        if self.view3dCheckbox.isChecked():
+            # adjust out of plain range proportionally
+            zoom = [(r[1]-r[0])/(self.imageRange[window][axis][1]-self.imageRange[window][axis][0])-1 for r,axis in zip(newRange,axes)]
+            zoom = min(zoom) if min(zoom)<0 else max(zoom)
+            axes = self.imageShapeIndex[window]
+            rng = self.imageRange[window][axes[2]]
+            zoomPix = 0.5*zoom*(rng[1]-rng[0])
+            rng[0] -= zoomPix
+            rng[1] += zoomPix
+            if rng[0]>=rng[1]:
+                rng[0] -= 1
+                rng[1] += 1
+            imageShape = self.stitchShape[window] if self.stitchState[window] else self.imageObjs[self.checkedFileIndex[window][0]].data.shape
+            rngMax = imageShape[axes[2]]-1
+            rng[0] = 0 if rng[0]<0 else int(rng[0])
+            rng[1] = rngMax if rng[1]>rngMax else int(rng[1])
+            newRange.append(rng)
+        for rng,axis in zip(newRange,axes):
+            if window==self.selectedWindow or self.linkWindowsCheckbox.isChecked():
+                self.rangeEditBoxes[axis][0].setText(str(rng[0]+1))
+                self.rangeEditBoxes[axis][1].setText(str(rng[1]+1))
+        self.setImageRange(newRange,axes,window=window)
         
-    def setImageRange(self,imageRange,imageShape,newVal,axes=(0,1,2),rangeInd=None):
-        if rangeInd is None:
-            newRange = newVal
-        else:
-            newRange = imageRange[:]
-            newRange[rangeInd] = newVal
-        for ax,rng in zip(axes,newRange):
-            if rng[0]<0:
-                rng[0] = 0
-            if rng[1]>imageShape[ax]:
-                rng[1] = imageShape[ax]
-            imageRange[ax] = rng
+    def setImageRange(self,newRange=None,axes=(0,1,2),rangeInd=slice(2),window=None):
+        if window is None:
+            window = self.selectedWindow
+        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [window]
+        for window in windows:
+            if self.stitchState[window]:
+                imageShape = self.stitchShape[window]
+                self.holdStitchRange[window] = False if newRange is None and isinstance(rangeInd,slice) else True
+            else:
+                imageShape = self.imageObjs[self.checkedFileIndex[window][0]].data.shape
+            if newRange is None: # reset min and/or max
+                newRange = [[0,imageShape[axis]-1][rangeInd] for axis in axes]
+            for rng,axis in zip(newRange,axes):
+                axRange = self.imageRange[window][axis]
+                axRange[rangeInd] = rng
+                if axRange[0]<=self.imageIndex[window][axis]<=axRange[1]:
+                    imgIndChanged = False
+                else:
+                    imgIndChanged = True
+                    if self.imageIndex[window][axis]<axRange[0]:
+                        self.imageIndex[window][axis] = axRange[0]
+                    else:
+                        self.imageIndex[window][axis] = axRange[1]
+                    if window==self.selectedWindow or self.linkWindowsCheckbox.isChecked():
+                        self.imageNumEditBoxes[axis].setText(str(self.imageIndex[window][axis]+1))
+                if self.view3dCheckbox.isChecked():
+                    shapeInd = self.imageShapeIndex[window][:2]
+                    if axis in shapeInd:
+                        ind = shapeInd.index(axis)
+                        if imgIndChanged:
+                            self.view3dSliceLines[window][ind].setValue(self.imageIndex[window][axis])
+                        self.view3dSliceLines[window][ind].setBounds(rng)
+            if self.imageShapeIndex[window][2] in axes and (imgIndChanged or self.sliceProjState[window]):
+                self.displayImage([window])
+            if any(axis in self.imageShapeIndex[window][:2] for axis in axes):
+                self.setViewBoxRange([window])
         
     def saveImageRange(self):
         filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.p')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
-        rng = [[int(self.yRangeLowEdit.text())-1,int(self.yRangeHighEdit.text())],[int(self.xRangeLowEdit.text())-1,int(self.xRangeHighEdit.text())],[int(self.zRangeLowEdit.text())-1,int(self.zRangeHighEdit.text())]]
-        np.save(filePath,rng)
+        np.save(filePath,self.imageRange[self.selectedWindow])
     
     def loadImageRange(self):
         filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.p')
         if filePath=='':
             return
         self.fileOpenPath = os.path.dirname(filePath)
-        rng = np.load(filePath)
-        self.xRangeLowEdit.setText(str(rng[1][0]+1))
-        self.xRangeHighEdit.setText(str(rng[1][1]))
-        self.yRangeLowEdit.setText(str(rng[0][0]+1))
-        self.yRangeHighEdit.setText(str(rng[0][1]))
-        self.zRangeLowEdit.setText(str(rng[2][0]+1))
-        self.zRangeHighEdit.setText(str(rng[2][1]))
-        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
-        if self.stitchCheckbox.isChecked():
-            self.setImageRange(self.stitchRange[self.selectedWindow],self.stitchShape[self.selectedWindow],rng)
-            self.holdStitchRange = True
-        else:
-            for fileInd in set().union(*(self.checkedFileIndex[window] for window in windows)):
-                self.setImageRange(self.imageObjs[fileInd].range,self.imageObjs[fileInd].data.shape,rng)
-        self.setViewBoxRange(windows)
+        savedRange = np.load(filePath)
+        imageShape = self.stitchShape[self.selectedWindow] if self.stitchState[self.selectedWindow] else self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].data.shape
+        for rangeBox,rng,size in zip(self.rangeEditBoxes,savedRange,imageShape):
+            if rng[0]<0:
+                rng[0] = 0
+            if rng[1]>size-1:
+                rng[1] = size-1
+            rangeBox[0].setText(str(rng[0]+1))
+            rangeBox[1].setText(str(rng[1]+1))
+        self.setImageRange(savedRange)
         
     def lowLevelLineCallback(self):
         newVal = self.lowLevelLine.value()
@@ -1229,11 +1438,12 @@ class ImageGui():
         self.setLevels(newVal,levelsInd=1)
         
     def setLevels(self,newVal,levelsInd):
+        chInd = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannelIndex[self.selectedWindow]
         for fileInd in self.selectedFileIndex:
-            for ch in self.selectedChannelIndex[self.selectedWindow]:
+            for ch in chInd:
                 if ch<self.imageObjs[fileInd].data.shape[3]:
                     self.imageObjs[fileInd].levels[ch][levelsInd] = newVal
-        self.displayImage(self.getAffectedWindows(chInd=True))
+        self.displayImage(self.getAffectedWindows(chInd))
         
     def gammaEditCallback(self):
         newVal = round(float(self.gammaEdit.text()),2)
@@ -1251,11 +1461,12 @@ class ImageGui():
         self.setGamma(newVal)
     
     def setGamma(self,newVal):
+        chInd = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannelIndex[self.selectedWindow]
         for fileInd in self.selectedFileIndex:
-            for ch in self.selectedChannelIndex[self.selectedWindow]:
+            for ch in chInd:
                 if ch<self.imageObjs[fileInd].data.shape[3]:
                     self.imageObjs[fileInd].gamma[ch] = newVal
-        self.displayImage(self.getAffectedWindows(chInd=True))
+        self.displayImage(self.getAffectedWindows(chInd))
         
     def alphaEditCallback(self):
         newVal = round(float(self.alphaEdit.text()),2)
@@ -1273,11 +1484,12 @@ class ImageGui():
         self.setAlpha(newVal)
         
     def setAlpha(self,newVal):
+        chInd = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannelIndex[self.selectedWindow]
         for fileInd in self.selectedFileIndex:
-            for ch in self.selectedChannelIndex[self.selectedWindow]:
+            for ch in chInd:
                 if ch<self.imageObjs[fileInd].data.shape[3]:
                     self.imageObjs[fileInd].alpha[ch] = newVal
-        self.displayImage(self.getAffectedWindows(chInd=True))
+        self.displayImage(self.getAffectedWindows(chInd))
         
     def normDisplayCheckboxCallback(self):
         self.normState[self.selectedWindow] = not self.normState(self.selectedWindow)
@@ -1290,23 +1502,26 @@ class ImageGui():
         self.gammaSlider.setValue(100)
         self.alphaEdit.setText('1')
         self.alphaSlider.setValue(100)
+        chInd = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannelIndex[self.selectedWindow]
         for fileInd in self.selectedFileIndex:
-            for ch in self.selectedChannelIndex[self.selectedWindow]:
+            for ch in chInd:
                 if ch<self.imageObjs[fileInd].data.shape[3]:
                     self.imageObjs[fileInd].levels[ch] = [0,255]
                     self.imageObjs[fileInd].gamma[ch] = 1
                     self.imageObjs[fileInd].alpha[ch] = 1
-        self.displayImage(self.getAffectedWindows(chInd=True))
+        self.displayImage(self.getAffectedWindows(chInd))
 
 
 class ImageObj():
     
     def __init__(self,filePath,fileType,numCh,chFileOrg):
-        if fileType=='Images (*.tif *.jpg *.png)':
+        if isinstance(filePath,np.ndarray):
+            self.data = filePath
+        elif fileType=='Images (*.tif *.jpg *.png)':
             self.data = cv2.imread(filePath,cv2.IMREAD_UNCHANGED)
         elif fileType=='Image Series (*.tif *.jpg *.png)':
             if len(filePath)%numCh>0:
-                return
+                raise Warning('Import aborted: number of files not the same for each channel')
             filesPerCh = int(len(filePath)/numCh)
             for ch in range(numCh):
                 if chFileOrg=='alternating':
@@ -1322,13 +1537,13 @@ class ImageObj():
                     elif d.shape==chData.shape[:2]:
                         chData[:,:,ind] = d
                     else:
-                        return
+                        raise Warning('Import aborted: image shapes not equal')
                 if ch==0:
                     self.data = chData[:,:,:,None]
                 elif chData.shape[:2]==self.data.shape[:2]:
                     self.data = np.concatenate((self.data,chData[:,:,:,None]),axis=-1)
                 else:
-                    return
+                    raise Warning('Import aborted: image shapes not equal')
         elif fileType in ('Bruker Dir (*.xml)','Bruker Dir + Siblings (*.xml)'):
             xml = minidom.parse(filePath)
             pvStateValues = xml.getElementsByTagName('PVStateValue')
@@ -1365,7 +1580,6 @@ class ImageObj():
             self.data = self.data[:,:,:,None]
         
         numCh = self.data.shape[3]
-        self.range = [[0,self.data.shape[i]] for i in (0,1,2)]
         self.levels = [[0,255] for _ in range(numCh)]
         self.gamma = [1 for _ in range(numCh)]
         self.alpha = [1 for _ in range(numCh)]
@@ -1390,7 +1604,6 @@ class ImageObj():
         
     def rotate90(self):
         self.data = np.rot90(self.data)
-        self.range[:2] = self.range[1::-1]
                 
                 
 def make8bit(data):
