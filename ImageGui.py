@@ -45,6 +45,7 @@ class ImageGui():
         self.selectedChannelIndex = [[] for _ in range(4)]
         self.sliceProjState = [0 for _ in range(4)]
         self.xyzState = [2 for _ in range(4)]
+        self.ignoreImageRangeChange = False
         self.imageShapeIndex = [(0,1,2) for _ in range(4)]
         self.imageShape = [None for _ in range(4)]
         self.imageRange = [None for _ in range(4)]
@@ -57,7 +58,12 @@ class ImageGui():
         self.markedPoints = [None for _ in range(4)]
         self.markPointsSize = 5
         self.markPointsColor = 'y'
-        self.ignoreImageRangeChange = False
+        self.selectedPoint = None
+        self.selectedPointWindow = None
+        self.alignRefWindow = [None for _ in range(4)]
+        self.alignRange = [None for _ in range(4)]
+        self.alignAxis = [None for _ in range(4)]
+        self.alignIndex = [None for _ in range(4)]
         
         # main window
         winHeight = 500
@@ -169,7 +175,7 @@ class ImageGui():
         self.removeFileButton.clicked.connect(self.removeFileButtonCallback)
         
         self.stitchCheckbox = QtGui.QCheckBox('Stitch')
-        self.stitchCheckbox.stateChanged.connect(self.stitchCheckboxCallback)
+        self.stitchCheckbox.clicked.connect(self.stitchCheckboxCallback)
         
         self.fileSelectLayout = QtGui.QGridLayout()
         self.fileSelectLayout.addWidget(self.moveFileDownButton,0,0,1,1)
@@ -181,13 +187,12 @@ class ImageGui():
         # window and channel selection
         self.windowListbox = QtGui.QListWidget()
         self.windowListbox.setSelectionMode(QtGui.QAbstractItemView.SingleSelection)
-        for n in range(4):
-            self.windowListbox.addItem('Window '+str(n+1))
+        self.windowListbox.addItems(['Window '+str(n) for n in range(4)])
         self.windowListbox.setCurrentRow(0)
         self.windowListbox.itemSelectionChanged.connect(self.windowListboxCallback)
         
         self.linkWindowsCheckbox = QtGui.QCheckBox('Link Windows')
-        self.linkWindowsCheckbox.stateChanged.connect(self.linkWindowsCheckboxCallback)
+        self.linkWindowsCheckbox.clicked.connect(self.linkWindowsCheckboxCallback)
         
         self.channelListbox = QtGui.QListWidget()
         self.channelListbox.setSelectionMode(QtGui.QAbstractItemView.ExtendedSelection)
@@ -234,10 +239,10 @@ class ImageGui():
         self.xyzGroupBox.setLayout(self.xyzGroupLayout)
         
         self.viewChannelsCheckbox = QtGui.QCheckBox('Channel View')
-        self.viewChannelsCheckbox.stateChanged.connect(self.viewChannelsCheckboxCallback)
+        self.viewChannelsCheckbox.clicked.connect(self.viewChannelsCheckboxCallback)
         
         self.view3dCheckbox = QtGui.QCheckBox('3D View')
-        self.view3dCheckbox.stateChanged.connect(self.view3dCheckboxCallback)
+        self.view3dCheckbox.clicked.connect(self.view3dCheckboxCallback)
         
         self.viewControlLayout = QtGui.QGridLayout()
         self.viewControlLayout.addWidget(self.imageDimensionsLabel,0,0,1,3)
@@ -325,7 +330,7 @@ class ImageGui():
         self.resetLevelsButton.clicked.connect(self.resetLevelsButtonCallback)
         
         self.normDisplayCheckbox = QtGui.QCheckBox('Normalize Display')
-        self.normDisplayCheckbox.stateChanged.connect(self.normDisplayCheckboxCallback)
+        self.normDisplayCheckbox.clicked.connect(self.normDisplayCheckboxCallback)
         
         self.gammaEditLayout = QtGui.QFormLayout()
         self.gammaEdit = QtGui.QLineEdit('')
@@ -375,37 +380,59 @@ class ImageGui():
         self.increasePointSizeButton.clicked.connect(self.increasePointSizeButtonCallback)
         
         self.markPointsColorMenu = QtGui.QComboBox()
-        self.markPointsColorChoices = ('Red','Green','Blue','Yellow','Magent','Cyan','Black','White')
-        self.markPointsColorMenu.addItems(self.markPointsColorChoices)
+        self.markPointsColorMenu.addItems(('Red','Green','Blue','Yellow','Magent','Cyan','Black','White'))
         self.markPointsColorMenu.setCurrentIndex(3)
         self.markPointsColorMenu.currentIndexChanged.connect(self.markPointsColorMenuCallback)
         
         self.markPointsTable = QtGui.QTableWidget(1,3)
         self.markPointsTable.resizeEvent = self.markPointsTableResizeCallback
-        self.markPointsTable.setSelectionMode(QtGui.QAbstractItemView.NoSelection)
+        self.markPointsTable.keyPressEvent = self.markPointsTableKeyPressCallback
         self.markPointsTable.setHorizontalHeaderLabels(['X','Y','Z'])
         for col in range(3):
             item = QtGui.QTableWidgetItem('')
-            item.setFlags(QtCore.Qt.ItemIsEnabled)
+            item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
             self.markPointsTable.setItem(0,col,item)
         
         self.markPointsLayout = QtGui.QGridLayout()
         self.markPointsLayout.addWidget(self.clearPointsButton,0,0,1,2)
-        self.markPointsLayout.addWidget(self.savePointsButton,0,2,1,2)
-        self.markPointsLayout.addWidget(self.decreasePointSizeButton,1,0,1,1)
-        self.markPointsLayout.addWidget(self.increasePointSizeButton,1,1,1,1)
-        self.markPointsLayout.addWidget(self.markPointsColorMenu,1,2,1,2)
+        self.markPointsLayout.addWidget(self.savePointsButton,1,0,1,2)
+        self.markPointsLayout.addWidget(self.markPointsColorMenu,0,2,1,2)
+        self.markPointsLayout.addWidget(self.decreasePointSizeButton,1,2,1,1)
+        self.markPointsLayout.addWidget(self.increasePointSizeButton,1,3,1,1)
         self.markPointsLayout.addWidget(self.markPointsTable,2,0,4,4)
         self.markPointsTab = QtGui.QWidget()
         self.markPointsTab.setLayout(self.markPointsLayout)
         self.utilityTabs = QtGui.QTabWidget()
         self.utilityTabs.addTab(self.markPointsTab,'Mark Points')
         
-        # warp tab
-        self.warpLayout = QtGui.QGridLayout()
-        self.warpTab = QtGui.QWidget()
-        self.warpTab.setLayout(self.warpLayout)
-        self.utilityTabs.addTab(self.warpTab,'Warp')
+        # alignment tab
+        self.alignReferenceLabel = QtGui.QLabel('Reference')
+        self.alignRefWindowMenu = QtGui.QComboBox()
+        self.alignRefWindowMenu.addItems(['Window '+str(n) for n in range(4)])
+        self.alignRefWindowMenu.setCurrentIndex(0)
+        
+        self.alignStartLabel = QtGui.QLabel('Start')
+        self.alignStartEdit = QtGui.QLineEdit('')
+        self.alignStartEdit.setAlignment(QtCore.Qt.AlignHCenter)
+        
+        self.alignEndLabel = QtGui.QLabel('End')
+        self.alignEndEdit = QtGui.QLineEdit('')
+        self.alignEndEdit.setAlignment(QtCore.Qt.AlignHCenter)
+        
+        self.alignCheckbox = QtGui.QCheckBox('Align')
+        self.alignCheckbox.clicked.connect(self.alignCheckboxCallback)
+        
+        self.alignLayout = QtGui.QGridLayout()
+        self.alignLayout.addWidget(self.alignReferenceLabel,0,0,1,1)
+        self.alignLayout.addWidget(self.alignRefWindowMenu,0,1,1,1)
+        self.alignLayout.addWidget(self.alignStartLabel,1,0,1,1)
+        self.alignLayout.addWidget(self.alignStartEdit,1,1,1,1)
+        self.alignLayout.addWidget(self.alignEndLabel,2,0,1,1)
+        self.alignLayout.addWidget(self.alignEndEdit,2,1,1,1)
+        self.alignLayout.addWidget(self.alignCheckbox,3,0,1,2)
+        self.alignTab = QtGui.QWidget()
+        self.alignTab.setLayout(self.alignLayout)
+        self.utilityTabs.addTab(self.alignTab,'Align')
         
         # main layout
         self.mainWidget = QtGui.QWidget()
@@ -429,11 +456,6 @@ class ImageGui():
     def mainWinResizeCallback(self,event):
         if len(self.displayedWindows)>0:
             self.setViewBoxRange(self.displayedWindows)
-            
-    def markPointsTableResizeCallback(self,event):
-        w = int(self.markPointsTable.viewport().width()/3)
-        for col in range(self.markPointsTable.columnCount()):
-            self.markPointsTable.setColumnWidth(col,w)    
         
     def saveImage(self):
         filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.tif')
@@ -536,8 +558,7 @@ class ImageGui():
         self.displayedWindows.remove(window)
         self.imageItem[window].setImage(np.zeros((2,2,3),dtype=np.uint8).transpose((1,0,2)),autoLevels=False)
         self.imageViewBox[window].setMouseEnabled(x=False,y=False)
-        self.markPointsPlot[window].setData(x=[],y=[])
-        self.markedPoints[window] = None
+        self.clearMarkedPoints([window])
         if window==self.selectedWindow:
             self.sliceButton.setChecked(True)
             self.zButton.setChecked(True)
@@ -765,6 +786,8 @@ class ImageGui():
         if isSlice:
             sliceAxis = self.imageShapeIndex[window][2]
             i = self.imageIndex[window][sliceAxis]
+            if i<0:
+                return
             if self.stitchState[window]:
                 i -= self.stitchPos[window,fileInd,sliceAxis]
                 if not 0<=i<imageObj.data.shape[sliceAxis]:
@@ -862,7 +885,6 @@ class ImageGui():
         
     def mainWinKeyPressCallback(self,event):
         key = event.key()
-        modifiers = QtGui.QApplication.keyboardModifiers()
         if key in (44,46) and self.sliceButton.isChecked() and not self.view3dCheckbox.isChecked():
             axis = self.imageShapeIndex[self.selectedWindow][2]
             imgInd = self.imageIndex[self.selectedWindow][axis]
@@ -870,28 +892,58 @@ class ImageGui():
                 self.setImageNum(axis,imgInd-1)
             else: # >
                 self.setImageNum(axis,imgInd+1)
-        elif self.stitchCheckbox.isChecked():
-            if int(modifiers & QtCore.Qt.ShiftModifier)>0:
-                move = 100
-            elif int(modifiers & QtCore.Qt.ControlModifier)>0:
-                move = 10
-            else:
-                move = 1
+        elif self.stitchCheckbox.isChecked() and key in (16777237,16777235,16777234,16777236,45,61):
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindows]
             fileInd = list(set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex))
-            if key in (16777235,16777237): # up,down
-                axis = self.imageShapeIndex[self.selectedWindow][0]
-            elif key in (16777234,16777236): # left,right
-                axis = self.imageShapeIndex[self.selectedWindow][1]
-            elif key in (61,45): # plus,minus
-                axis = self.imageShapeIndex[self.selectedWindow][2]
-            else:
-                return
-            if key in (16777237,16777236,45):
-                move *= -1
-            self.stitchPos[windows,fileInd,axis] += move
+            moveAxis,moveDist = self.getMoveParams(self.selectedWindow,key)
+            self.stitchPos[windows,fileInd,moveAxis] += moveDist
             self.updateStitchShape(windows)
             self.displayImage(windows)
+        elif self.selectedPoint is not None and key in (QtCore.Qt.Key_Delete,16777237,16777235,16777234,16777236):
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedPointWindow]
+            for window in windows:
+                imgAxis = self.imageShapeIndex[window][2]
+                if self.markedPoints[window][self.selectedPoint,imgAxis]==self.imageIndex[window][imgAxis]:
+                    if key==QtCore.Qt.Key_Delete:
+                        if self.markedPoints[window].shape[0]>1:
+                            self.markedPoints[window] = np.delete(self.markedPoints[window],self.selectedPoint,0)
+                            self.selectedPoint = None
+                        else:
+                            self.clearMarkedPoints([window])
+                            continue
+                    else:
+                        moveAxis,moveDist = self.getMoveParams(window,key,True)
+                        point = self.markedPoints[window][self.selectedPoint]
+                        point[moveAxis] += moveDist
+                        rng = self.imageRange[window][moveAxis]
+                        if point[moveAxis]<rng[0]:
+                            point[moveAxis] = rng[0]
+                        elif point[moveAxis]>rng[1]:
+                            point[moveAxis] = rng[1]
+                    if window==self.selectedWindow:
+                        self.fillPointsTable()
+                    self.plotMarkedPoints([window])
+                    
+    def getMoveParams(self,window,key,flipVert=False):
+        down,up = 16777237,16777235
+        if flipVert:
+            up,down = down,up
+        if key in (down,up):
+            axis = self.imageShapeIndex[window][0]
+        elif key in (16777234,16777236): # left,right
+            axis = self.imageShapeIndex[window][1]
+        else: # minus,plus
+            axis = self.imageShapeIndex[window][2]
+        modifiers = self.app.keyboardModifiers()
+        if int(modifiers & QtCore.Qt.ShiftModifier)>0:
+            dist = 100
+        elif int(modifiers & QtCore.Qt.ControlModifier)>0:
+            dist = 10
+        else:
+            dist = 1
+        if key in (down,16777234,45):
+            dist *= -1
+        return axis,dist
             
     def window1ClickCallback(self,event):
         self.imageClickCallback(event,window=0)
@@ -919,23 +971,31 @@ class ImageGui():
             
     def imageClickCallback(self,event,window):
         x,y = int(event.pos().x()),int(event.pos().y())
-        if event.button()==QtCore.Qt.LeftButton and self.view3dCheckbox.isChecked():
-            for line,pos in zip(self.view3dSliceLines[window],(y,x)):
-                line.setValue(pos)
-            self.updateView3dLines(axes=self.imageShapeIndex[window][:2],position=(y,x))
-        elif event.button()==QtCore.Qt.RightButton:
-            pass
+        if event.button()==QtCore.Qt.LeftButton:
+            if self.view3dCheckbox.isChecked():
+                for line,pos in zip(self.view3dSliceLines[window],(y,x)):
+                    line.setValue(pos)
+                self.updateView3dLines(axes=self.imageShapeIndex[window][:2],position=(y,x))
+            elif not self.viewChannelsCheckbox.isChecked():
+                self.windowListbox.setCurrentRow(window)
+        elif event.button()==QtCore.Qt.RightButton and self.markedPoints[window] is not None:
+            axis = self.imageShapeIndex[window][2]
+            rows = np.where(self.markedPoints[window][:,axis]==self.imageIndex[window][axis])[0]
+            if any(rows):
+                self.selectedPoint = rows[np.argmin(np.sum(np.absolute(self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]]-[y,x]),axis=1))]
+                self.selectedPointWindow = window
         
     def imageDoubleClickCallback(self,event,window):
-        if self.utilityTabs.currentIndex()==0:
-            x,y = event.pos().x(),event.pos().y()
-            newPoint = np.array([y,x,self.imageIndex[window][self.imageShapeIndex[window][2]]])[list(self.imageShapeIndex[window])]
-            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [window]
-            for window in windows:
-                self.markedPoints[window] = newPoint[None,:] if self.markedPoints[window] is None else np.concatenate((self.markedPoints[window],newPoint[None,:]))
-            if self.selectedWindow in windows:
+        x,y = event.pos().x(),event.pos().y()
+        newPoint = np.array([y,x,self.imageIndex[window][self.imageShapeIndex[window][2]]])[list(self.imageShapeIndex[window])]
+        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [window]
+        for window in windows:
+            self.markedPoints[window] = newPoint[None,:] if self.markedPoints[window] is None else np.concatenate((self.markedPoints[window],newPoint[None,:]))
+            if window==self.selectedWindow:
                 self.fillPointsTable()
-            self.plotMarkedPoints(windows)
+        self.selectedPoint = self.markedPoints[window].shape[0]-1
+        self.selectedPointWindow = window
+        self.plotMarkedPoints(windows)
         
     def fileListboxSelectionCallback(self):
         self.selectedFileIndex = getSelectedItemsIndex(self.fileListbox)
@@ -972,23 +1032,22 @@ class ImageGui():
                     self.setView3dOn()
                 else:
                     self.initImageWindow()
-        else:
-            if fileInd in checked:
-                checked.remove(fileInd)
-                if len(checked)<1:
-                    if self.viewChannelsCheckbox.isChecked():
-                        self.setViewChannelsOff()
-                    elif self.view3dCheckbox.isChecked():
-                        self.setView3dOff()
-                    self.resetImageWindow()
-                else:
-                    self.updateChannelList()
-                    if fileInd in self.selectedFileIndex:
-                        self.displayImageLevels()
-                    if self.stitchCheckbox.isChecked():
-                        self.stitchPos[windows,fileInd,:] = np.nan
-                        self.updateStitchShape(windows)
-                    self.displayImage(windows)                    
+        elif item.checkState()!=QtCore.Qt.Checked and fileInd in checked:
+            checked.remove(fileInd)
+            if len(checked)<1:
+                if self.viewChannelsCheckbox.isChecked():
+                    self.setViewChannelsOff()
+                elif self.view3dCheckbox.isChecked():
+                    self.setView3dOff()
+                self.resetImageWindow()
+            else:
+                self.updateChannelList()
+                if fileInd in self.selectedFileIndex:
+                    self.displayImageLevels()
+                if self.stitchCheckbox.isChecked():
+                    self.stitchPos[windows,fileInd,:] = np.nan
+                    self.updateStitchShape(windows)
+                self.displayImage(windows)                    
                     
     def moveFileDownButtonCallback(self):
         for i,fileInd in reversed(list(enumerate(self.selectedFileIndex))):
@@ -1098,6 +1157,7 @@ class ImageGui():
             if len(self.checkedFileIndex[self.selectedWindow])>1:
                 for i in self.checkedFileIndex[self.selectedWindow][1:]:
                     self.fileListbox.item(i).setCheckState(QtCore.Qt.Unchecked)
+                del(self.checkedFileIndex[self.selectedWindow][1:])
             if self.viewChannelsCheckbox.isChecked() or self.view3dCheckbox.isChecked():
                 self.displayImageInfo()
                 if self.viewChannelsCheckbox.isChecked():
@@ -1125,19 +1185,27 @@ class ImageGui():
         self.displayImageRange()
             
     def windowListboxCallback(self):
-        self.selectedWindow = self.windowListbox.currentRow()
+        self.setActiveWindow(self.windowListbox.currentRow())
+        
+    def setActiveWindow(self,window):
+        self.selectedWindow = window
         for i in range(self.fileListbox.count()):
-            if i in self.checkedFileIndex[self.selectedWindow]:
+            if i in self.checkedFileIndex[window]:
                 self.fileListbox.item(i).setCheckState(QtCore.Qt.Checked)
             else:
                 self.fileListbox.item(i).setCheckState(QtCore.Qt.Unchecked)
-        self.sliceProjButtons[self.sliceProjState[self.selectedWindow]].setChecked(True)
-        self.xyzButtons[self.xyzState[self.selectedWindow]].setChecked(True)
-        self.stitchCheckbox.setChecked(self.stitchState[self.selectedWindow])
+        self.sliceProjButtons[self.sliceProjState[window]].setChecked(True)
+        self.xyzButtons[self.xyzState[window]].setChecked(True)
+        self.stitchCheckbox.setChecked(self.stitchState[window])
         for ind,region in enumerate(self.atlasRegionMenu):
-            region.setChecked(ind in self.selectedAtlasRegions[self.selectedWindow])
+            region.setChecked(ind in self.selectedAtlasRegions[window])
         self.clearPointsTable()
         self.fillPointsTable()
+        isAligned = self.alignRefWindow[window] is not None
+        self.alignCheckbox.setChecked(isAligned)
+        alignRange = [str(self.alignRange[window][i]+1) for i in (0,1)] if isAligned else ('','')
+        self.alignStartEdit.setText(alignRange[0])
+        self.alignEndEdit.setText(alignRange[1])
         self.displayImageInfo()
     
     def linkWindowsCheckboxCallback(self):
@@ -1179,19 +1247,10 @@ class ImageGui():
         self.channelListbox.blockSignals(False)
         
     def channelColorMenuCallback(self):
-        color = self.channelColorMenu.currentText()
-        self.channelColorMenu.setCurrentIndex(0)
-        if color!='Channel Color':
-            if color=='Red':
-                rgbInd = (0,)
-            elif color=='Green':
-                rgbInd = (1,)
-            elif color=='Blue':
-                rgbInd = (2,)
-            elif color=='Magenta':
-                rgbInd = (0,2)
-            else: # Gray
-                rgbInd = (0,1,2)
+        menuInd = self.channelColorMenu.currentIndex()
+        if menuInd>0:
+            rgbInd = ((0,1,2),(0,),(1,),(2,),(0,2))[menuInd-1]
+            self.channelColorMenu.setCurrentIndex(0)
             chInd = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannelIndex[self.selectedWindow]
             for fileInd in self.selectedFileIndex:
                 for ch in chInd:
@@ -1276,12 +1335,14 @@ class ImageGui():
         for i,editBox in enumerate(self.imageNumEditBoxes):
             editBox.setText(str(self.imageIndex[self.selectedWindow][i]))
         isSlice = self.sliceButton.isChecked()
-        for window in self.displayedWindows:
+        self.ignoreImageRangeChange = True
+        for window in range(3):
             for line,ax in zip(self.view3dSliceLines[window],self.imageShapeIndex[window][:2]):
                 line.setValue(self.imageIndex[window][ax])
-                line.setBounds(self.imageRange[window][ax])
+                line.setBounds(self.imageRange[self.selectedWindow][ax])
                 line.setVisible(isSlice)
                 self.imageViewBox[window].addItem(line)
+        self.ignoreImageRangeChange = False
         self.setLinkedViewOn(numWindows=3)
             
     def setView3dOff(self):
@@ -1326,6 +1387,7 @@ class ImageGui():
             self.normState[window] = self.normState[self.selectedWindow]
             self.stitchState[window] = self.stitchState[self.selectedWindow]
             self.selectedAtlasRegions[window] = self.selectedAtlasRegions[self.selectedWindow]
+            self.markedPoints[window] = self.markedPoints[self.selectedWindow]
         if self.stitchState[self.selectedWindow]:
             self.stitchPos[:numWindows] = self.stitchPos[self.selectedWindow]
         for window in self.displayedWindows:
@@ -1368,6 +1430,8 @@ class ImageGui():
             for window in windows:
                 self.imageIndex[window][axis] = imgInd
             self.displayImage(windows)
+            if not self.linkWindowsCheckbox.isChecked():
+                self.alignWindows(self.selectedWindow,axis)
             
     def zoomPanButtonCallback(self):
         isOn = self.zoomPanButton.isChecked()
@@ -1462,6 +1526,8 @@ class ImageGui():
                 self.displayImage([window])
             if any(axis in self.imageShapeIndex[window][:2] for axis in axes):
                 self.setViewBoxRange([window])
+            if imgIndChanged and not self.linkWindowsCheckbox.isChecked():
+                self.alignWindows(window,axis)
         
     def saveImageRange(self):
         filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
@@ -1573,14 +1639,16 @@ class ImageGui():
         if windows is None:
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow] 
         for window in windows:
-            if self.markedPoints[window] is not None:
+            if self.markedPoints[window] is None:
+                x = y = []
+            else:
                 axis = self.imageShapeIndex[window][2]
                 rows = np.arange(self.imageRange[window][axis][0],self.imageRange[window][axis][1]+1) if self.sliceProjState[window] else self.markedPoints[window][:,axis]==self.imageIndex[window][axis]
                 if any(rows):
                     y,x = self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]].T
                 else:
                     x = y = []
-                self.markPointsPlot[window].setData(x=x,y=y,symbolSize=self.markPointsSize,symbolPen=self.markPointsColor)
+            self.markPointsPlot[window].setData(x=x,y=y,symbolSize=self.markPointsSize,symbolPen=self.markPointsColor)
         
     def fillPointsTable(self):
         if self.markedPoints[self.selectedWindow] is not None:
@@ -1590,11 +1658,11 @@ class ImageGui():
                 self.markPointsTable.setRowCount(numPts)
             rows = range(numPts) if newRows>1 else [numPts-1]
             for row in rows:
-                pt = [str(round(self.markedPoints[self.selectedWindow][row,i],2)) for i in (1,0,2)]
+                pt = [str(round(self.markedPoints[self.selectedWindow][row,i],2)+1) for i in (1,0,2)]
                 for col in range(3):
                     if row>0:
                         item = QtGui.QTableWidgetItem(pt[col])
-                        item.setFlags(QtCore.Qt.ItemIsEnabled)
+                        item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
                         self.markPointsTable.setItem(row,col,item)
                     else:
                         self.markPointsTable.item(row,col).setText(pt[col])
@@ -1605,9 +1673,18 @@ class ImageGui():
             self.markPointsTable.item(0,col).setText('')
     
     def clearPointsButtonCallback(self):
-        self.markedPoints[self.selectedWindow] = None
-        self.clearPointsTable()
-        self.plotMarkedPoints()
+        self.clearMarkedPoints()
+        
+    def clearMarkedPoints(self,windows=None):
+        if windows is None:
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+        for window in windows:
+            self.markedPoints[window] = None
+            if self.selectedPoint is not None and window==self.selectedPointWindow:
+                self.selectedPoint = None
+            if window==self.selectedWindow:
+                self.clearPointsTable()
+        self.plotMarkedPoints(windows)
     
     def decreasePointSizeButtonCallback(self):
         if self.markPointsSize>1:
@@ -1619,7 +1696,7 @@ class ImageGui():
         self.plotMarkedPoints()
     
     def markPointsColorMenuCallback(self):
-        self.markPointsColor = ('r','g','b','y','m','c','k','w')[self.markPointsColorChoices.index(self.markPointsColorMenu.currentText())]
+        self.markPointsColor = ('r','g','b','y','m','c','k','w')[self.markPointsColorMenu.currentIndex()]
         self.plotMarkedPoints() 
         
     def savePointsButtonCallback(self):
@@ -1627,7 +1704,62 @@ class ImageGui():
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
-        np.save(filePath,self.markedPoints[self.selectedWindow][:,(1,0,2)])
+        np.save(filePath,self.markedPoints[self.selectedWindow][:,(1,0,2)]+1)
+        
+    def markPointsTableResizeCallback(self,event):
+        w = int(self.markPointsTable.viewport().width()/3)
+        for col in range(self.markPointsTable.columnCount()):
+            self.markPointsTable.setColumnWidth(col,w)
+        
+    def markPointsTableKeyPressCallback(self,event):
+        key = event.key()
+        modifiers = QtGui.QApplication.keyboardModifiers()
+        if key==QtCore.Qt.Key_C and int(modifiers & QtCore.Qt.ControlModifier)>0:
+            selected = self.markPointsTable.selectedRanges()
+            contents = ''
+            for row in range(selected[0].topRow(),selected[0].bottomRow()+1):
+                for col in range(selected[0].leftColumn(),selected[0].rightColumn()+1):
+                    contents += str(self.markPointsTable.item(row,col).text())+'\t'
+                contents = contents[:-1]+'\n'
+            self.app.clipboard().setText(contents)
+        
+    def alignCheckboxCallback(self):
+        if self.alignCheckbox.isChecked():
+            refWin = self.alignRefWindowMenu.currentIndex()
+            axis = self.xyzState[self.selectedWindow]
+            refSize = self.imageShape[refWin][axis]
+            start,end = int(self.alignStartEdit.text())-1,int(self.alignEndEdit.text())-1
+            reverse = False
+            if start>end:
+                start,end = end,start
+                reverse = True
+            if start<0 or end>=refSize:
+                self.alignCheckbox.setChecked(False)
+                raise Warning('Align start and end must be between 0 and the reference image axis length')
+            self.alignRefWindow[self.selectedWindow] = refWin
+            self.alignRange[self.selectedWindow] = [end,start] if reverse else [start,end]
+            self.alignAxis[self.selectedWindow] = axis
+            n = end-start+1
+            interval = n/self.imageShape[self.selectedWindow][axis]
+            alignInd = np.arange(n)/interval
+            self.alignIndex[self.selectedWindow] = -np.ones(refSize,dtype=int)
+            self.alignIndex[self.selectedWindow][start:end+1] = alignInd[::-1] if reverse else alignInd
+        else:
+            self.alignRefWindow[self.selectedWindow] = None
+            if self.imageIndex[self.selectedWindow][self.alignAxis[self.selectedWindow]]<0:
+                self.imageIndex[self.selectedWindow][self.alignAxis[self.selectedWindow]] = 0
+                self.displayImage([self.selectedWindow])
+            
+    def alignWindows(self,window,axis):
+        if window in self.alignRefWindow:
+            alignedWindow = self.alignRefWindow.index(window)
+            if self.alignAxis[alignedWindow]==axis:
+                self.imageIndex[alignedWindow][axis] = self.alignIndex[alignedWindow][self.imageIndex[window][axis]]
+                self.displayImage([alignedWindow])
+        elif self.alignRefWindow[window] is not None:
+            if self.alignAxis[self.selectedWindow]==axis:
+                self.imageIndex[self.alignRefWindow[window]][axis] = np.where(self.alignIndex[window]==self.imageIndex[window][axis])[0][0]
+                self.displayImage([self.alignRefWindow[window]])
 
 
 class ImageObj():
