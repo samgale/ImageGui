@@ -104,11 +104,14 @@ class ImageGui():
         self.imageMenuPixelSize.addActions([self.imageMenuPixelSizeXY,self.imageMenuPixelSizeZ])        
         
         self.imageMenuFlip = self.imageMenu.addMenu('Flip')
-        self.imageMenuFlipHorz = QtGui.QAction('Horizontal',self.mainWin)
-        self.imageMenuFlipHorz.triggered.connect(self.flipImageHorz)
-        self.imageMenuFlipVert = QtGui.QAction('Vertical',self.mainWin)
-        self.imageMenuFlipVert.triggered.connect(self.flipImageVert)
-        self.imageMenuFlip.addActions([self.imageMenuFlipHorz,self.imageMenuFlipVert])
+        self.imageMenuFlipX = QtGui.QAction('X',self.mainWin)
+        self.imageMenuFlipX.triggered.connect(self.flipImage)
+        self.imageMenuFlipY = QtGui.QAction('Y',self.mainWin)
+        self.imageMenuFlipY.triggered.connect(self.flipImage)
+        self.imageMenuFlipZ = QtGui.QAction('Z',self.mainWin)
+        self.imageMenuFlipZ.triggered.connect(self.flipImage)
+        self.flipOptions = (self.imageMenuFlipX,self.imageMenuFlipY,self.imageMenuFlipZ)
+        self.imageMenuFlip.addActions(self.flipOptions)
         
         self.imageMenuRotate90 = QtGui.QAction('Rotate 90',self.mainWin)
         self.imageMenuRotate90.triggered.connect(self.rotateImage90)
@@ -708,14 +711,15 @@ class ImageGui():
             self.imageViewBox[window].setRange(xRange=xRange,yRange=yRange,padding=0)
         self.ignoreImageRangeChange = False
         
-    def flipImageHorz(self):
+    def flipImage(self):
+        option = self.flipOptions.index(self.mainWin.sender())
         for fileInd in self.selectedFileIndex:
-            self.imageObjs[fileInd].flipHorz()
-        self.displayImage(self.getAffectedWindows())
-            
-    def flipImageVert(self):
-        for fileInd in self.selectedFileIndex:
-            self.imageObjs[fileInd].flipVert()
+            if option==0:
+                self.imageObjs[fileInd].flipX()
+            elif option==1:
+                self.imageObjs[fileInd].flipY()
+            else:
+                self.imageObjs[fileInd].flipZ()
         self.displayImage(self.getAffectedWindows())
         
     def rotateImage90(self):
@@ -907,10 +911,12 @@ class ImageGui():
                     if key==QtCore.Qt.Key_Delete:
                         if self.markedPoints[window].shape[0]>1:
                             self.markedPoints[window] = np.delete(self.markedPoints[window],self.selectedPoint,0)
+                            if window==self.selectedWindow:
+                                self.markPointsTable.removeRow(self.selectedPoint)
                             self.selectedPoint = None
+                            self.plotMarkedPoints([window])
                         else:
                             self.clearMarkedPoints([window])
-                            continue
                     else:
                         moveAxis,moveDist = self.getMoveParams(window,key,True)
                         point = self.markedPoints[window][self.selectedPoint]
@@ -920,9 +926,9 @@ class ImageGui():
                             point[moveAxis] = rng[0]
                         elif point[moveAxis]>rng[1]:
                             point[moveAxis] = rng[1]
-                    if window==self.selectedWindow:
-                        self.fillPointsTable()
-                    self.plotMarkedPoints([window])
+                        if window==self.selectedWindow:
+                            self.markPointsTable.item(self.selectedPoint,moveAxis).setText(str(point+1))
+                        self.plotMarkedPoints([window])
                     
     def getMoveParams(self,window,key,flipVert=False):
         down,up = 16777237,16777235
@@ -992,7 +998,7 @@ class ImageGui():
         for window in windows:
             self.markedPoints[window] = newPoint[None,:] if self.markedPoints[window] is None else np.concatenate((self.markedPoints[window],newPoint[None,:]))
             if window==self.selectedWindow:
-                self.fillPointsTable()
+                self.fillPointsTable(newPoint=True)
         self.selectedPoint = self.markedPoints[window].shape[0]-1
         self.selectedPointWindow = window
         self.plotMarkedPoints(windows)
@@ -1643,20 +1649,24 @@ class ImageGui():
                 x = y = []
             else:
                 axis = self.imageShapeIndex[window][2]
-                rows = np.arange(self.imageRange[window][axis][0],self.imageRange[window][axis][1]+1) if self.sliceProjState[window] else self.markedPoints[window][:,axis]==self.imageIndex[window][axis]
+                rng = np.arange(self.imageRange[window][axis][0],self.imageRange[window][axis][1]+1) if self.sliceProjState[window] else self.imageIndex[window][axis]
+                rows = np.in1d(self.markedPoints[window][:,axis],rng)
                 if any(rows):
                     y,x = self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]].T
                 else:
                     x = y = []
             self.markPointsPlot[window].setData(x=x,y=y,symbolSize=self.markPointsSize,symbolPen=self.markPointsColor)
         
-    def fillPointsTable(self):
+    def fillPointsTable(self,newPoint=False):
         if self.markedPoints[self.selectedWindow] is not None:
             numPts = self.markedPoints[self.selectedWindow].shape[0]
-            newRows = numPts-self.markPointsTable.rowCount()
-            if newRows>0:
+            if newPoint:
+                if numPts>1:
+                    self.markPointsTable.insertRow(numPts-1)
+                rows = [numPts-1]
+            else:
                 self.markPointsTable.setRowCount(numPts)
-            rows = range(numPts) if newRows>1 else [numPts-1]
+                rows = range(numPts)
             for row in rows:
                 pt = [str(round(self.markedPoints[self.selectedWindow][row,i],2)+1) for i in (1,0,2)]
                 for col in range(3):
@@ -1717,9 +1727,14 @@ class ImageGui():
         if key==QtCore.Qt.Key_C and int(modifiers & QtCore.Qt.ControlModifier)>0:
             selected = self.markPointsTable.selectedRanges()
             contents = ''
+            pixelSize = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].pixelSize
+            pixelSize = None if any(size is None for size in pixelSize) else [pixelSize[i] for i in (1,0,2)]
             for row in range(selected[0].topRow(),selected[0].bottomRow()+1):
                 for col in range(selected[0].leftColumn(),selected[0].rightColumn()+1):
-                    contents += str(self.markPointsTable.item(row,col).text())+'\t'
+                    val = self.markPointsTable.item(row,col).text()
+                    if int(modifiers & QtCore.Qt.AltModifier)>0 and pixelSize is not None:
+                        val = str((float(val)-1)*pixelSize[col])
+                    contents += val+'\t'
                 contents = contents[:-1]+'\n'
             self.app.clipboard().setText(contents)
         
@@ -1740,8 +1755,9 @@ class ImageGui():
             self.alignRange[self.selectedWindow] = [end,start] if reverse else [start,end]
             self.alignAxis[self.selectedWindow] = axis
             n = end-start+1
-            interval = n/self.imageShape[self.selectedWindow][axis]
-            alignInd = np.arange(n)/interval
+            rng = self.imageRange[self.selectedWindow][axis]
+            interval = n/(rng[1]-rng[0]+1)
+            alignInd = np.arange(n)/interval+rng[0]
             self.alignIndex[self.selectedWindow] = -np.ones(refSize,dtype=int)
             self.alignIndex[self.selectedWindow][start:end+1] = alignInd[::-1] if reverse else alignInd
         else:
@@ -1846,11 +1862,14 @@ class ImageObj():
         if not hasattr(self,'position'):
             self.position = None
             
-    def flipHorz(self):
+    def flipX(self):
         self.data = self.data[:,::-1]
             
-    def flipVert(self):
+    def flipY(self):
         self.data = self.data[::-1]
+        
+    def flipZ(self):
+        self.data = self.data[:,:,::-1]
         
     def rotate90(self):
         self.data = np.rot90(self.data)
