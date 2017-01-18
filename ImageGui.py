@@ -1035,7 +1035,8 @@ class ImageGui():
                         elif point[moveAxis]>rng[1]:
                             point[moveAxis] = rng[1]
                         if window==self.selectedWindow:
-                            self.markPointsTable.item(self.selectedPoint,moveAxis).setText(str(point+1))
+                            ind = 2 if moveAxis==2 else int(not moveAxis)
+                            self.markPointsTable.item(self.selectedPoint,ind).setText(str(point[moveAxis]+1))
                         self.plotMarkedPoints([window])
                     
     def getMoveParams(self,window,key,flipVert=False):
@@ -1095,7 +1096,7 @@ class ImageGui():
         elif event.button()==QtCore.Qt.RightButton and self.markedPoints[window] is not None:
             axis = self.imageShapeIndex[window][2]
             rows = np.where(self.markedPoints[window][:,axis]==self.imageIndex[window][axis])[0]
-            if any(rows):
+            if len(rows)>0:
                 self.selectedPoint = rows[np.argmin(np.sum(np.absolute(self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]]-[y,x]),axis=1))]
                 self.selectedPointWindow = window
         
@@ -1926,6 +1927,7 @@ class ImageObj():
             if len(self.data.shape)>2:
                 self.data = self.data[:,:,None,:]
         elif fileType=='Image Series (*.tif *.jpg *.png)':
+            numImg = len(filePath) if chFileOrg=='rgb' else int(len(filePath)/numCh)
             for ind,file in enumerate(filePath):
                 d = cv2.imread(file,cv2.IMREAD_UNCHANGED)
                 if chFileOrg=='rgb':
@@ -1934,7 +1936,7 @@ class ImageObj():
                 elif len(d.shape)!=2:
                     raise Warning('Import aborted: images must be grayscale if channel file organization is not rgb')
                 if ind==0:
-                    self.data = np.zeros(d.shape[:2]+(len(filePath),numCh),dtype=d.dtype)
+                    self.data = np.zeros(d.shape[:2]+(numImg,numCh),dtype=d.dtype)
                 elif d.shape[:2]!=self.data.shape[:2]:
                     raise Warning('Import aborted: image shapes not equal')
                 if chFileOrg=='rgb':
@@ -1985,15 +1987,9 @@ class ImageObj():
         
         numCh = self.data.shape[3]
         self.levels = [[0,255] for _ in range(numCh)]
-        self.gamma = [1 for _ in range(numCh)]
-        self.alpha = [1 for _ in range(numCh)]
-        
-        if self.data.shape[3]==2:
-            self.rgbInd = [(0,2),(1,)]
-        elif self.data.shape[3]==3:
-            self.rgbInd = [(0,),(1,),(2,)]
-        else:
-            self.rgbInd = [(0,1,2) for _ in range(numCh)]
+        self.gamma = [1]*numCh
+        self.alpha = [1]*numCh
+        self.rgbInd = [(0,1,2) for _ in range(numCh)]
         
         if not hasattr(self,'pixelSize'):
             self.pixelSize = [None]*3
