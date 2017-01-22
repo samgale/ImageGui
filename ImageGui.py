@@ -51,7 +51,7 @@ class ImageGui():
         self.checkedFileIndex = [[] for _ in range(self.numWindows)]
         self.selectedWindow = 0
         self.displayedWindows = []
-        self.selectedChannelIndex = [[] for _ in range(self.numWindows)]
+        self.selectedChannels = [[] for _ in range(self.numWindows)]
         self.sliceProjState = [0]*self.numWindows
         self.xyzState = [2]*self.numWindows
         self.ignoreImageRangeChange = False
@@ -522,8 +522,7 @@ class ImageGui():
             return
         self.fileSavePath = os.path.dirname(filePath)
         yRange,xRange = [self.imageRange[self.selectedWindow][axis] for axis in self.imageShapeIndex[self.selectedWindow][:2]]
-        self.updateImage(self.selectedWindow)
-        cv2.imwrite(filePath,self.image[yRange[0]:yRange[1],xRange[0]:xRange[1],::-1])
+        cv2.imwrite(filePath,self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1,::-1])
         
     def saveVolume(self):
         filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.tif')
@@ -534,8 +533,7 @@ class ImageGui():
         yRange,xRange,zRange = [self.imageRange[self.selectedWindow][axis] for axis in self.imageShapeIndex[self.selectedWindow]]
         for i in range(zRange[0],zRange[1]+1):
             self.imageIndex[self.selectedWindow] = i
-            self.updateImage(self.selectedWindow)
-            cv2.imwrite(filePath[:-4]+'_'+str(i)+'.tif',self.image[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1,::-1])
+            cv2.imwrite(filePath[:-4]+'_'+str(i)+'.tif',self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1,::-1])
         self.imageIndex[self.selectedWindow] = imageIndex
                    
     def openFile(self):
@@ -576,13 +574,12 @@ class ImageGui():
     def loadImageData(self,filePath,fileType,numCh=None,chFileOrg=None):
         # filePath and fileType can also be a numpy array (Y x X x Z x Channels) and optional label, respectively
         # Provide numCh and chFileOrg if importing a multiple file image series
-        self.imageObjs.append(ImageObj(filePath,fileType,numCh,chFileOrg))
+        loadData = not self.optionsMenuImportAsNeeded.isChecked()
+        self.imageObjs.append(ImageObj(filePath,fileType,numCh,chFileOrg,loadData))
         if isinstance(filePath,np.ndarray):
             label = 'data_'+time.strftime('%Y%m%d_%H%M%S') if fileType is None else fileType
-        elif isinstance(filePath,list):
-            label = filePath[0]
         else:
-            label = fileType
+            label = filePath[0] if isinstance(filePath,list) else filePath
         self.fileListbox.addItem(label)
         if len(self.imageObjs)>1:
             self.fileListbox.item(self.fileListbox.count()-1).setCheckState(QtCore.Qt.Unchecked)
@@ -590,17 +587,17 @@ class ImageGui():
                 self.stitchPos = np.concatenate((self.stitchPos,np.full((self.numWindows,1,3),np.nan)),axis=1)
         else:
             self.fileListbox.item(self.fileListbox.count()-1).setCheckState(QtCore.Qt.Checked)
-            self.fileListbox.blockSignals(True)
-            self.fileListbox.setCurrentRow(0)
-            self.fileListbox.blockSignals(False)
-            self.selectedFileIndex = [0]
             self.checkedFileIndex[self.selectedWindow] = [0]
             self.displayedWindows = [self.selectedWindow]
             self.initImageWindow()
         
     def initImageWindow(self):
-        self.selectedChannelIndex[self.selectedWindow] = [0] 
-        self.imageShape[self.selectedWindow] = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].data.shape
+        self.selectedFileIndex = [self.checkedFileIndex[self.selectedWindow][0]]
+        self.fileListbox.blockSignals(True)
+        self.fileListbox.setCurrentRow(self.selectedFileIndex[0])
+        self.fileListbox.blockSignals(False)
+        self.selectedChannels[self.selectedWindow] = [0] 
+        self.imageShape[self.selectedWindow] = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].shape[:3]
         self.imageRange[self.selectedWindow] = [[0,s-1] for s in self.imageShape[self.selectedWindow]]
         self.imageIndex[self.selectedWindow] = [0,0,0]
         self.displayImageInfo()
@@ -624,6 +621,7 @@ class ImageGui():
         self.imageItem[window].setImage(np.zeros((2,2,3),dtype=np.uint8).transpose((1,0,2)),autoLevels=False)
         self.imageViewBox[window].setMouseEnabled(x=False,y=False)
         self.clearMarkedPoints([window])
+        self.alignRefWindow[window] = None
         if window==self.selectedWindow:
             self.sliceButton.setChecked(True)
             self.zButton.setChecked(True)
@@ -632,6 +630,7 @@ class ImageGui():
             self.displayImageInfo()
             self.setViewBoxRange(self.displayedWindows) 
             self.clearAtlasRegions(updateImage=False)
+            self.alignCheckbox.setChecked(False)
         
     def displayImageInfo(self):
         self.updateChannelList()
@@ -695,17 +694,20 @@ class ImageGui():
                 newPixelSize = None if oldPixelSize is None else round(oldPixelSize/scaleFactor,4)
             if newPixelSize is not None:
                 self.imageObjs[fileInd].pixelSize[:2] = [newPixelSize]*2
-            shape = self.imageObjs[fileInd].data.shape
+            shape = self.imageObjs[fileInd].shape
             shape = tuple(int(round(shape[i]*scaleFactor)) for i in (0,1))+shape[2:]
             scaledData = np.zeros(shape,dtype=np.uint8)
             interpMethod = cv2.INTER_AREA if scaleFactor<1 else cv2.INTER_LINEAR
-            for ch in range(shape[3]):
-                for i in range(shape[2]):
-                    scaledData[:,:,i,ch] = cv2.resize(self.imageObjs[fileInd].data[:,:,i,ch],shape[1::-1],interpolation=interpMethod)
+            chInd = list(range(shape[3]))
+            dataIter = self.imageObjs[fileInd].getDataIterator(chInd,slice(0,shape[2]))
+            for i in range(shape[2]):
+                for ch in chInd:
+                    scaledData[:,:,i,ch] = cv2.resize(next(dataIter),shape[1::-1],interpolation=interpMethod)
             self.imageObjs[fileInd].data = scaledData
+            self.imageObjs[fileInd].shape = shape
         windows = self.getAffectedWindows()
         for window in windows:
-            self.imageShape[window] = self.imageObjs[self.checkedFileIndex[window][0]].data.shape
+            self.imageShape[window] = self.imageObjs[self.checkedFileIndex[window][0]].shape[:3]
             self.setImageRange(window=window)
             if window==self.selectedWindow:
                 self.displayImageInfo()
@@ -751,18 +753,18 @@ class ImageGui():
             isSet = False
             pixIntensityHist = np.zeros(256)
             for i in fileInd:
-                chInd = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannelIndex[self.selectedWindow]
-                chInd = [ch for ch in chInd if ch<self.imageObjs[i].data.shape[3]]
-                if len(chInd)>0:
-                    hist,_ = np.histogram(self.imageObjs[i].data[:,:,:,chInd],bins=256,range=(0,256))
+                channels = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannels[self.selectedWindow]
+                channels = [ch for ch in channels if ch<self.imageObjs[i].shape[3]]
+                if len(channels)>0:
+                    hist,_ = np.histogram(self.imageObjs[i].getData(channels),bins=256,range=(0,256))
                     pixIntensityHist += hist
                     if not isSet:
-                        self.lowLevelLine.setValue(self.imageObjs[i].levels[chInd[0]][0])
-                        self.highLevelLine.setValue(self.imageObjs[i].levels[chInd[0]][1])
-                        self.gammaEdit.setText(str(self.imageObjs[i].gamma[chInd[0]]))
-                        self.gammaSlider.setValue(self.imageObjs[i].gamma[chInd[0]]*100)
-                        self.alphaEdit.setText(str(self.imageObjs[i].alpha[chInd[0]]))
-                        self.alphaSlider.setValue(self.imageObjs[i].alpha[chInd[0]]*100)
+                        self.lowLevelLine.setValue(self.imageObjs[i].levels[channels[0]][0])
+                        self.highLevelLine.setValue(self.imageObjs[i].levels[channels[0]][1])
+                        self.gammaEdit.setText(str(self.imageObjs[i].gamma[channels[0]]))
+                        self.gammaSlider.setValue(self.imageObjs[i].gamma[channels[0]]*100)
+                        self.alphaEdit.setText(str(self.imageObjs[i].alpha[channels[0]]))
+                        self.alphaSlider.setValue(self.imageObjs[i].alpha[channels[0]]*100)
                         isSet = True
             pixIntensityHist[pixIntensityHist<1] = 1
             pixIntensityHist = np.log10(pixIntensityHist)
@@ -844,125 +846,110 @@ class ImageGui():
             self.imageViewBox[window].setRange(xRange=xRange,yRange=yRange,padding=0)
         self.ignoreImageRangeChange = False
         
-    def displayImage(self,windows=None,update=True):
+    def displayImage(self,windows=None):
         if windows is None:
             windows = [self.selectedWindow]
         for window in windows:
-            if update:
-                self.updateImage(window)
-            self.imageItem[window].setImage(self.image.transpose((1,0,2)),autoLevels=False)
+            self.imageItem[window].setImage(self.getImage(window).transpose((1,0,2)),autoLevels=False)
         self.plotMarkedPoints(windows)
         
-    def updateImage(self,window):
+    def getImage(self,window=None):
+        if window is None:
+            window = self.selectedWindow
         imageShape = [self.imageShape[window][i] for i in self.imageShapeIndex[window][:2]]
-        rgb = np.zeros((imageShape[0],imageShape[1],3))
+        image = np.zeros((imageShape[0],imageShape[1],3))
         for fileInd in self.checkedFileIndex[window]:
             imageObj = self.imageObjs[fileInd]
             if self.stitchCheckbox.isChecked():
-                i,j = [slice(self.stitchPos[window,fileInd,i],self.stitchPos[window,fileInd,i]+imageObj.data.shape[i]) for i in self.imageShapeIndex[window][:2]]
+                i,j = (slice(self.stitchPos[window,fileInd,i],self.stitchPos[window,fileInd,i]+imageObj.shape[i]) for i in self.imageShapeIndex[window][:2])
             else:
-                i,j = [slice(0,imageObj.data.shape[i]) for i in self.imageShapeIndex[window][:2]]
-            for ch in self.selectedChannelIndex[window]:
-                if ch<imageObj.data.shape[3]:
-                    channelData = self.getChannelData(imageObj,fileInd,window,ch)
-                    if channelData is not None:
-                        for k in imageObj.rgbInd[ch]:
-                            if self.stitchCheckbox.isChecked():
-                                rgb[i,j,k] = np.maximum(rgb[i,j,k],channelData)
-                            elif imageObj.alpha[ch]<1:
-                                rgb[i,j,k] *= 1-imageObj.alpha[ch]
-                                rgb[i,j,k] += channelData*imageObj.alpha[ch]
-                            else:
-                                rgb[i,j,k] = channelData
+                i,j = (slice(0,imageObj.shape[i]) for i in self.imageShapeIndex[window][:2])
+            channels = [ch for ch in self.selectedChannels[window] if ch<imageObj.shape[3]]
+            data = self.getImageData(imageObj,fileInd,window,channels)
+            if data is not None:
+                for ind,ch in enumerate(channels):
+                    for k in imageObj.rgbInd[ch]:
+                        if self.stitchCheckbox.isChecked():
+                            image[i,j,k] = np.maximum(image[i,j,k],data[:,:,ind])
+                        elif imageObj.alpha[ch]<1:
+                            image[i,j,k] *= 1-imageObj.alpha[ch]
+                            image[i,j,k] += data[:,:,ind]*imageObj.alpha[ch]
+                        else:
+                            image[i,j,k] = data[:,:,ind]
         if self.normState[window]:
-            rgb -= rgb.min()
-            rgb[rgb<0] = 0
-            if rgb.any():
-                rgb *= 255/rgb.max()
-        self.image = rgb.astype(np.uint8)
+            image -= image.min()
+            image.clip(min=0,out=image)
+            if image.any():
+                image *= 255/image.max()
+        image = image.astype(np.uint8)
         for regionInd in self.selectedAtlasRegions[window]:
             _,contours,_ = cv2.findContours(self.getAtlasRegion(window,self.atlasRegionIDs[regionInd]).copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(self.image,contours,-1,(255,255,255))
+            cv2.drawContours(image,contours,-1,(255,255,255))
+        return image
                     
-    def getChannelData(self,imageObj,fileInd,window,ch):
-        isSlice = not self.sliceProjState[window]
-        if isSlice:
-            sliceAxis = self.imageShapeIndex[window][2]
-            i = self.imageIndex[window][sliceAxis]
+    def getImageData(self,imageObj,fileInd,window,channels):
+        isProj = self.sliceProjState[window]
+        axis = self.imageShapeIndex[window][2]
+        if isProj:
+            rng = (0,imageObj.shape[axis]-1) if self.stitchState[window] else self.imageRange[window][axis]
+            imgSlice = slice(rng[0],rng[1]+1)
+        else:
+            i = self.imageIndex[window][axis]
             if i<0:
                 return
             if self.stitchState[window]:
-                i -= self.stitchPos[window,fileInd,sliceAxis]
-                if not 0<=i<imageObj.data.shape[sliceAxis]:
+                i -= self.stitchPos[window,fileInd,axis]
+                if not 0<=i<imageObj.shape[axis]:
                     return
-        else:
-            rng = self.imageRange[window]
-        if self.xyzState[window]==2:
-            if isSlice:
-                channelData = imageObj.data[:,:,i,ch]
+            imgSlice = slice(i,i+1)
+        if axis==2:
+            data = imageObj.getData(channels,imgSlice).max(axis)
+        elif axis==1:
+            if imageObj.data is None:
+                pass
             else:
-                if self.stitchCheckbox.isChecked():
-                    channelData = imageObj.data[:,:,:,ch].max(axis=2)
-                else:
-                    channelData = imageObj.data[:,:,rng[2][0]:rng[2][1]+1,ch].max(axis=2)
-        elif self.xyzState[window]==1:
-            if isSlice:
-                channelData = imageObj.data[i,:,:,ch].T
-            else:
-                if self.stitchState[window]:
-                    channelData = imageObj.data[:,:,:,ch].max(axis=0).T
-                else:
-                    channelData = imageObj.data[rng[0][0]:rng[0][1]+1,:,:,ch].max(axis=0).T
+                data = imageObj.data[:,imgSlice,:,channels].max(axis)
         else:
-            if isSlice:
-                channelData = imageObj.data[:,i,:,ch]
+            if imageObj.data is None:
+                pass
             else:
-                if self.stitchState[window]:
-                    channelData = imageObj.data[:,:,:,ch].max(axis=1)
-                else:
-                    channelData = imageObj.data[:,rng[1][0]:rng[1][1]+1,:,ch].max(axis=1)
-        channelData = channelData.astype(float)
-        if self.showBinaryState[window]:
-            ind = channelData>=imageObj.levels[ch][1]
-            channelData[ind] = 255
-            channelData[np.logical_not(ind)] = 0
-        else:
-            if imageObj.levels[ch][0]>0 or imageObj.levels[ch][1]<255:
-                channelData -= imageObj.levels[ch][0] 
-                channelData[channelData<0] = 0
-                channelData *= 255/(imageObj.levels[ch][1]-imageObj.levels[ch][0])
-                channelData[channelData>255] = 255
-            if imageObj.gamma[ch]!=1:
-                channelData /= 255
-                channelData **= imageObj.gamma[ch]
-                channelData *= 255
-        return channelData
+                data = imageObj.data.transpose((0,2,1,3))[imgSlice,:,:,channels].max(axis)
+        data = data.astype(float)
+        for ind,ch in enumerate(channels):
+            chData = data[:,:,ind]
+            if self.showBinaryState[window]:
+                aboveThresh = chData>=imageObj.levels[ch][1]
+                chData[aboveThresh] = 255
+                chData[np.logical_not(aboveThresh)] = 0
+            else:
+                if imageObj.levels[ch][0]>0 or imageObj.levels[ch][1]<255:
+                    chData -= imageObj.levels[ch][0] 
+                    chData.clip(min=0,out=chData)
+                    chData *= 255/(imageObj.levels[ch][1]-imageObj.levels[ch][0])
+                    chData.clip(max=255,out=chData)
+                if imageObj.gamma[ch]!=1:
+                    chData /= 255
+                    chData **= imageObj.gamma[ch]
+                    chData *= 255
+        return data
         
     def getAtlasRegion(self,window,region):
-        isSlice = not self.sliceProjState[window]
-        i = self.imageIndex[window][self.imageShapeIndex[window][2]]
-        rng = self.imageRange[window]
-        if self.xyzState[window]==2:
-            if isSlice:
-                a = self.atlasAnnotationData[:,:,i]
-                a = np.in1d(a,region).reshape(a.shape)
-            else:
-                a = self.atlasAnnotationData[:,:,rng[2][0]:rng[2][1]+1]
-                a = np.in1d(a,region).reshape(a.shape).max(axis=2)
-        elif self.xyzState[window]==1:
-            if isSlice:
-                a = self.atlasAnnotationData[i,:,:].T
-                a = np.in1d(a,region).reshape(a.shape)
-            else:
-                a = self.atlasAnnotationData[rng[0][0]:rng[0][1]+1,:,:]
-                a = np.in1d(a,region).reshape(a.shape).max(axis=0).T
+        isProj = self.sliceProjState[window]
+        axis = self.imageShapeIndex[window][2]
+        if isProj:
+            rng = self.imageRange[window][axis]
+            ind = slice(rng[0],rng[1]+1)
         else:
-            if isSlice:
-                a = self.atlasAnnotationData[:,i,:]
-                a = np.in1d(a,region).reshape(a.shape)
-            else:
-                a = self.atlasAnnotationData[:,rng[1][0]:rng[1][1]+1,:]
-                a = np.in1d(a,region).reshape(a.shape).max(axis=1)
+            ind = self.imageIndex[window][axis]
+        if axis==2:
+            a = self.atlasAnnotationData[:,:,ind]
+        elif axis==1:
+            a = self.atlasAnnotationData[:,ind,:]
+        else:
+            a = self.atlasAnnotationData.transpose((0,2,1))[ind,:,:]
+        a = np.in1d(a,region).reshape(a.shape)
+        if isProj:
+            a = a.max(axis=axis)
         return a
         
     def setAtlasRegions(self):
@@ -1121,13 +1108,13 @@ class ImageGui():
         checked = self.checkedFileIndex[self.selectedWindow]
         windows = self.displayedWindows if self.viewChannelsCheckbox.isChecked() or self.view3dCheckbox.isChecked() else [self.selectedWindow]
         if item.checkState()==QtCore.Qt.Checked and fileInd not in checked:
-            if not self.stitchCheckbox.isChecked() and (len(checked)>0 or self.linkWindowsCheckbox.isChecked()) and self.imageObjs[fileInd].data.shape[:3]!=self.imageObjs[checked[0]].data.shape[:3]:
+            if not self.stitchCheckbox.isChecked() and (len(checked)>0 or self.linkWindowsCheckbox.isChecked()) and self.imageObjs[fileInd].shape[:3]!=self.imageObjs[checked[0]].shape[:3]:
                 item.setCheckState(QtCore.Qt.Unchecked)
                 raise Warning('Images displayed in the same window or linked windows must be the same shape unless stitching')
             checked.append(fileInd)
             checked.sort()
             if len(checked)>1:
-                if self.imageObjs[fileInd].data.shape[3]>self.channelListbox.count():
+                if self.imageObjs[fileInd].shape[3]>self.channelListbox.count():
                     self.updateChannelList()
                     if self.viewChannelsCheckbox.isChecked():
                         self.setViewChannelsOn()
@@ -1214,16 +1201,18 @@ class ImageGui():
             self.stitchPos = np.delete(self.stitchPos,self.selectedFileIndex,axis=1)
             self.updateStitchShape(windows)
         self.selectedFileIndex = []
-        if len(self.checkedFileIndex[self.selectedWindow])<1:
-            if self.viewChannelsCheckbox.isChecked():
-                self.setViewChannelsOff()
-            elif self.view3dCheckbox.isChecked():
-                self.setView3dOff()
-            self.resetImageWindow()
-        else:
-            self.updateChannelList()
-            self.displayImageLevels()
-            self.displayImage(windows)
+        for window in windows:
+            if len(self.checkedFileIndex[window])<1:
+                if self.viewChannelsCheckbox.isChecked():
+                    self.setViewChannelsOff()
+                elif self.view3dCheckbox.isChecked():
+                    self.setView3dOff()
+                self.resetImageWindow(window)
+            else:
+                if window==self.selectedWindow:
+                    self.updateChannelList()
+                    self.displayImageLevels()
+                self.displayImage([window])
             
     def stitchCheckboxCallback(self):
         if self.stitchCheckbox.isChecked():
@@ -1253,10 +1242,10 @@ class ImageGui():
                 else:
                     if col>math.floor(len(self.selectedFileIndex)**0.5):
                         col = 0
-                        pos[0] += self.imageObjs[i].data.shape[0]
+                        pos[0] += self.imageObjs[i].shape[0]
                         pos[1] = 0
                     elif col>0:
-                        pos[1] += self.imageObjs[i].data.shape[1]
+                        pos[1] += self.imageObjs[i].shape[1]
                     col += 1
                     self.stitchPos[self.selectedWindow,i,:] = pos
             for window in windows:
@@ -1287,7 +1276,7 @@ class ImageGui():
             windows = [self.selectedWindow]
         for window in windows:
             self.stitchPos[window] -= np.nanmin(self.stitchPos[window],axis=0)
-            tileShapes = np.array([self.imageObjs[i].data.shape[0:3] for i in self.checkedFileIndex[window]])
+            tileShapes = np.array([self.imageObjs[i].shape[:3] for i in self.checkedFileIndex[window]])
             self.imageShape[window] = (self.stitchPos[self.selectedWindow,self.checkedFileIndex[window],:]+tileShapes).max(axis=0)
             if self.holdStitchRange[window]:
                 for axis in (0,1,2):
@@ -1333,22 +1322,22 @@ class ImageGui():
             if len(self.displayedWindows)>1:
                 imageObj = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]]
                 otherWindows = [w for w in self.displayedWindows if w!=self.selectedWindow]
-                if any(self.imageObjs[self.checkedFileIndex[window][0]].data.shape[:3]!=imageObj.data.shape[:3] for window in otherWindows):
+                if any(self.imageObjs[self.checkedFileIndex[window][0]].shape[:3]!=imageObj.shape[:3] for window in otherWindows):
                     self.linkWindowsCheckbox.setChecked(False)
                     raise Warning('Image shapes must be equal when linking windows')
                 for window in otherWindows:
                     self.imageRange[window] = self.imageRange[self.selectedWindow][:]
                 self.setViewBoxRange(self.displayedWindows)
                 
-    def getAffectedWindows(self,chInd=None):
-        return [window for window in self.displayedWindows if any(i in self.selectedFileIndex for i in self.checkedFileIndex[window]) and (chInd is None or any(ch in chInd for ch in self.selectedChannelIndex[window]))]
+    def getAffectedWindows(self,channels=None):
+        return [window for window in self.displayedWindows if any(i in self.selectedFileIndex for i in self.checkedFileIndex[window]) and (channels is None or any(ch in channels for ch in self.selectedChannels[window]))]
         
     def channelListboxCallback(self):
         if self.viewChannelsCheckbox.isChecked():
             self.viewChannelsSelectedCh = self.channelListbox.currentRow()
             self.displayImageLevels()
         else:
-            self.selectedChannelIndex[self.selectedWindow] = getSelectedItemsIndex(self.channelListbox)
+            self.selectedChannels[self.selectedWindow] = getSelectedItemsIndex(self.channelListbox)
             self.displayImageLevels()
             self.displayImage()
         
@@ -1356,10 +1345,10 @@ class ImageGui():
         self.channelListbox.blockSignals(True)
         self.channelListbox.clear()
         if len(self.checkedFileIndex[self.selectedWindow])>0:
-            numCh = max(self.imageObjs[i].data.shape[3] for i in self.checkedFileIndex[self.selectedWindow])
+            numCh = max(self.imageObjs[i].shape[3] for i in self.checkedFileIndex[self.selectedWindow])
             for ch in range(numCh):
                 item = QtGui.QListWidgetItem('Ch '+str(ch+1),self.channelListbox)
-                if ch in self.selectedChannelIndex[self.selectedWindow]:
+                if ch in self.selectedChannels[self.selectedWindow]:
                     item.setSelected(True)
         self.channelListbox.blockSignals(False)
         
@@ -1368,12 +1357,12 @@ class ImageGui():
         if menuInd>0:
             rgbInd = ((0,1,2),(0,),(1,),(2,),(0,2))[menuInd-1]
             self.channelColorMenu.setCurrentIndex(0)
-            chInd = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannelIndex[self.selectedWindow]
+            channels = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannels[self.selectedWindow]
             for fileInd in self.selectedFileIndex:
-                for ch in chInd:
-                    if ch<self.imageObjs[fileInd].data.shape[3]:
+                for ch in channels:
+                    if ch<self.imageObjs[fileInd].shape[3]:
                         self.imageObjs[fileInd].rgbInd[ch] = rgbInd
-            self.displayImage(self.getAffectedWindows(chInd))
+            self.displayImage(self.getAffectedWindows(channels))
         
     def sliceProjButtonCallback(self):
         isSlice = self.sliceButton.isChecked()
@@ -1416,12 +1405,12 @@ class ImageGui():
     def setViewChannelsOn(self):
         self.viewChannelsCheckbox.setChecked(True)
         self.channelListbox.blockSignals(True)
-        self.viewChannelsSelectedCh = self.selectedChannelIndex[self.selectedWindow][0]
+        self.viewChannelsSelectedCh = self.selectedChannels[self.selectedWindow][0]
         self.channelListbox.setCurrentRow(self.viewChannelsSelectedCh)
         self.channelListbox.setSelectionMode(QtGui.QAbstractItemView.SingleSelection)
         self.channelListbox.blockSignals(False)
-        numCh = min(self.numWindows,max(self.imageObjs[i].data.shape[3] for i in self.checkedFileIndex[self.selectedWindow]))
-        self.selectedChannelIndex[:numCh] = [[ch] for ch in range(numCh)]
+        numCh = min(self.numWindows,max(self.imageObjs[i].shape[3] for i in self.checkedFileIndex[self.selectedWindow]))
+        self.selectedChannels[:numCh] = [[ch] for ch in range(numCh)]
         for window in range(numCh):
             self.xyzState[window] = self.xyzState[self.selectedWindow]
             self.imageShapeIndex[window] = self.imageShapeIndex[self.selectedWindow]
@@ -1445,7 +1434,7 @@ class ImageGui():
     def setView3dOn(self):
         self.view3dCheckbox.setChecked(True)
         self.xyzGroupBox.setEnabled(False)
-        self.selectedChannelIndex[:3] = [self.selectedChannelIndex[self.selectedWindow] for _ in range(3)]
+        self.selectedChannels[:3] = [self.selectedChannels[self.selectedWindow] for _ in range(3)]
         self.xyzState[:3] = [2,1,0]
         self.imageShapeIndex[:3] = [(0,1,2),(2,1,0),(0,2,1)]
         self.imageIndex[:3] = [[(r[1]-r[0])//2 for r in self.imageRange[0]] for _ in range(3)]
@@ -1565,10 +1554,16 @@ class ImageGui():
             self.imageViewBox[window].setMouseEnabled(x=isOn,y=isOn)
         
     def resetViewButtonCallback(self):
-        for editBox,shape in zip(self.rangeEditBoxes,self.imageShape[self.selectedWindow]):
-            editBox[0].setText('1')
-            editBox[1].setText(str(shape))
-        self.setImageRange()
+        isDisplayed = len(self.checkedFileIndex[self.selectedWindow])>0
+        for axis,editBoxes in enumerate(self.rangeEditBoxes):
+            if isDisplayed:
+                editBoxes[0].setText('1')
+                editBoxes[1].setText(str(self.imageShape[self.selectedWindow][axis]))
+            else:
+                for box in editBoxes:
+                    box.setText('')
+        if isDisplayed:
+            self.setImageRange()
         
     def rangeEditCallback(self):
         source = self.mainWin.sender()
@@ -1688,12 +1683,12 @@ class ImageGui():
         self.setLevels(newVal,levelsInd=1)
         
     def setLevels(self,newVal,levelsInd):
-        chInd = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannelIndex[self.selectedWindow]
+        channels = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannels[self.selectedWindow]
         for fileInd in self.selectedFileIndex:
-            for ch in chInd:
-                if ch<self.imageObjs[fileInd].data.shape[3]:
+            for ch in channels:
+                if ch<self.imageObjs[fileInd].shape[3]:
                     self.imageObjs[fileInd].levels[ch][levelsInd] = newVal
-        self.displayImage(self.getAffectedWindows(chInd))
+        self.displayImage(self.getAffectedWindows(channels))
         
     def resetLevelsButtonCallback(self):
         self.lowLevelLine.setValue(0)
@@ -1702,14 +1697,14 @@ class ImageGui():
         self.gammaSlider.setValue(100)
         self.alphaEdit.setText('1')
         self.alphaSlider.setValue(100)
-        chInd = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannelIndex[self.selectedWindow]
+        channels = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannels[self.selectedWindow]
         for fileInd in self.selectedFileIndex:
-            for ch in chInd:
-                if ch<self.imageObjs[fileInd].data.shape[3]:
+            for ch in channels:
+                if ch<self.imageObjs[fileInd].shape[3]:
                     self.imageObjs[fileInd].levels[ch] = [0,255]
                     self.imageObjs[fileInd].gamma[ch] = 1
                     self.imageObjs[fileInd].alpha[ch] = 1
-        self.displayImage(self.getAffectedWindows(chInd))
+        self.displayImage(self.getAffectedWindows(channels))
         
     def normDisplayCheckboxCallback(self):
         self.normState[self.selectedWindow] = not self.normState[self.selectedWindow]
@@ -1741,12 +1736,12 @@ class ImageGui():
         self.setGamma(newVal)
     
     def setGamma(self,newVal):
-        chInd = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannelIndex[self.selectedWindow]
+        channels = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannels[self.selectedWindow]
         for fileInd in self.selectedFileIndex:
-            for ch in chInd:
-                if ch<self.imageObjs[fileInd].data.shape[3]:
+            for ch in channels:
+                if ch<self.imageObjs[fileInd].shape[3]:
                     self.imageObjs[fileInd].gamma[ch] = newVal
-        self.displayImage(self.getAffectedWindows(chInd))
+        self.displayImage(self.getAffectedWindows(channels))
         
     def alphaEditCallback(self):
         newVal = round(float(self.alphaEdit.text()),2)
@@ -1764,12 +1759,12 @@ class ImageGui():
         self.setAlpha(newVal)
         
     def setAlpha(self,newVal):
-        chInd = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannelIndex[self.selectedWindow]
+        channels = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannels[self.selectedWindow]
         for fileInd in self.selectedFileIndex:
-            for ch in chInd:
-                if ch<self.imageObjs[fileInd].data.shape[3]:
+            for ch in channels:
+                if ch<self.imageObjs[fileInd].shape[3]:
                     self.imageObjs[fileInd].alpha[ch] = newVal
-        self.displayImage(self.getAffectedWindows(chInd))
+        self.displayImage(self.getAffectedWindows(channels))
         
     def plotMarkedPoints(self,windows=None):
         if windows is None:
@@ -1779,8 +1774,8 @@ class ImageGui():
                 x = y = []
             else:
                 axis = self.imageShapeIndex[window][2]
-                rng = np.arange(self.imageRange[window][axis][0],self.imageRange[window][axis][1]+1) if self.sliceProjState[window] else self.imageIndex[window][axis]
-                rows = np.in1d(self.markedPoints[window][:,axis],rng)
+                rng = self.imageRange[window][axis] if self.sliceProjState[window] else [self.imageIndex[window][axis]]*2
+                rows = np.logical_and(self.markedPoints[window][:,axis]>=rng[0],self.markedPoints[window][:,axis]<=rng[1])
                 if any(rows):
                     y,x = self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]].T
                 else:
@@ -1871,7 +1866,7 @@ class ImageGui():
     def alignCheckboxCallback(self):
         if self.alignCheckbox.isChecked():
             refWin = self.alignRefMenu.currentIndex()
-            axis = self.xyzState[self.selectedWindow]
+            axis = self.imageShapeIndex[self.selectedWindow][2]
             refSize = self.imageShape[refWin][axis]
             start,end = int(self.alignStartEdit.text())-1,int(self.alignEndEdit.text())-1
             reverse = False
@@ -1908,7 +1903,27 @@ class ImageGui():
                 self.displayImage([self.alignRefWindow[window]])
     
     def transformButtonCallback(self):
-        pass
+        imageContours = []
+        for window in (self.warpRefMenu.currentIndex(),self.selectedWindow):
+            binState = self.showBinaryState[window]
+            self.showBinaryState[window] = True
+            imageContours.append(drawContour(self.getImage(window).max(axis=2)))
+            self.showBinaryState[window] = binState
+        template,warpImage = imageContours
+        _,warpMatrix = cv2.findTransformECC(template,warpImage,np.eye(2,3,dtype=np.float32),cv2.MOTION_AFFINE)
+        for fileInd in self.checkedFileIndex[self.selectedWindow]:
+            imageObj = self.imageObjs[fileInd]
+            i = self.imageIndex[self.selectedWindow]
+            warpData = np.zeros(template.shape+imageObj.shape[2:],dtype=np.uint8)
+            for ch in range(imageObj.shape[3]):
+                warpData[:,:,i,ch] = cv2.warpAffine(imageObj.getData(ch,i),warpMatrix,template.shape[::-1],flags=cv2.INTER_LINEAR+cv2.WARP_INVERSE_MAP)
+            imageObj.data = warpData
+            imageObj.shape = warpData.shape
+        self.imageShape[self.selectedWindow] = warpData.shape[:3]
+        self.setImageRange()
+        self.setViewBoxRangeLimits()
+        self.displayImageInfo()
+        self.displayImage()
     
     def copyPointsCheckboxCallback(self):
         pass
@@ -1919,49 +1934,61 @@ class ImageGui():
 
 class ImageObj():
     
-    def __init__(self,filePath,fileType,numCh,chFileOrg):
+    def __init__(self,filePath,fileType,numCh,chFileOrg,loadData):
+        self.data = None
         if isinstance(filePath,np.ndarray):
-            self.data = filePath
+            self.fileType = 'data'
+            self.filePath = None
+            self.data = self.formatData(filePath)
+            self.shape = self.data.shape
         elif fileType=='Images (*.tif *.jpg *.png)':
-            self.data = cv2.imread(filePath,cv2.IMREAD_UNCHANGED)
-            if len(self.data.shape)>2:
-                self.data = self.data[:,:,None,:]
+            self.fileType = 'image'
+            d = cv2.imread(filePath,cv2.IMREAD_ANYCOLOR)
+            numCh = 3 if len(d.shape)>2 else 1
+            self.filePath = [[filePath]]*numCh
+            self.shape = d.shape[:2]+(1,numCh)
+            if loadData: 
+                self.data = d[:,:,None,::-1] if numCh==3 else d[:,:,None,None]
         elif fileType=='Image Series (*.tif *.jpg *.png)':
-            numImg = len(filePath) if chFileOrg=='rgb' else int(len(filePath)/numCh)
+            self.fileType = 'image'
+            self.filePath = [[] for _ in range(numCh)]
             for ind,file in enumerate(filePath):
-                d = cv2.imread(file,cv2.IMREAD_UNCHANGED)
-                if chFileOrg=='rgb':
-                    if len(d.shape)!=3:
-                        raise Warning('Import aborted: images must be rgb if channel file organization is rgb')
-                elif len(d.shape)!=2:
-                    raise Warning('Import aborted: images must be grayscale if channel file organization is not rgb')
                 if ind==0:
-                    self.data = np.zeros(d.shape[:2]+(numImg,numCh),dtype=d.dtype)
-                elif d.shape[:2]!=self.data.shape[:2]:
-                    raise Warning('Import aborted: image shapes not equal')
+                    d = cv2.imread(file,cv2.IMREAD_ANYCOLOR)
+                    if chFileOrg=='rgb':
+                        if len(d.shape)!=3:
+                            raise Warning('Import aborted: images must be rgb if channel file organization is rgb')
+                    elif len(d.shape)!=2:
+                        raise Warning('Import aborted: images must be grayscale if channel file organization is not rgb')
+                    numImg = len(filePath) if chFileOrg=='rgb' else int(len(filePath)/numCh)
+                    self.shape = d.shape[:2]+(numImg,numCh)
                 if chFileOrg=='rgb':
-                    self.data[:,:,ind,:] = d
+                    for ch in range(numCh):
+                        self.filePath[ch].append(file)
                 else:
-                    if chFileOrg=='alternating':
-                        i = ind//numCh
-                        ch = ind%numCh
-                    else:
-                        filesPerCh = int(len(filePath)/numCh)
-                        i = ind%filesPerCh
-                        ch = ind//filesPerCh
-                    self.data[:,:,i,ch] = d
+                    ch = ind%numCh if chFileOrg=='alternating' else ind//int(len(filePath)/numCh)
+                    self.filePath[ch].append(file)
+            if loadData:
+                self.data = self.getData()
         elif fileType in ('Bruker Dir (*.xml)','Bruker Dir + Siblings (*.xml)'):
+            self.fileType = 'image'
             xml = minidom.parse(filePath)
             pvStateValues = xml.getElementsByTagName('PVStateValue')
             linesPerFrame = int(pvStateValues[7].getAttribute('value'))
             pixelsPerLine = int(pvStateValues[15].getAttribute('value'))
             frames = xml.getElementsByTagName('Frame')
-            self.data = np.zeros((linesPerFrame,pixelsPerLine,len(frames),len(frames[0].getElementsByTagName('File'))))
+            numImg = len(frames)
+            numCh = len(frames[0].getElementsByTagName('File'))
+            self.filePath = [[] for _ in range(numCh)]
+            self.shape = (linesPerFrame,pixelsPerLine,numImg,numCh)
             zpos = []
-            for i,frame in enumerate(frames):
+            for frame in frames:
                 zpos.append(float(frame.getElementsByTagName('SubindexedValue')[2].getAttribute('value')))
                 for ch,tifFile in enumerate(frame.getElementsByTagName('File')):
-                    self.data[:,:,i,ch] = cv2.imread(os.path.join(os.path.dirname(filePath),tifFile.getAttribute('filename')),cv2.IMREAD_UNCHANGED)
+                    file = os.path.join(os.path.dirname(filePath),tifFile.getAttribute('filename'))
+                    self.filePath[ch].append(file)
+            if loadData:
+                self.data = self.getData()
             self.pixelSize = [round(float(pvStateValues[9].getElementsByTagName('IndexedValue')[0].getAttribute('value')),4)]*2
             if len(frames)>1:
                 self.pixelSize.append(round(zpos[1]-zpos[0],4))
@@ -1971,58 +1998,122 @@ class ImageObj():
             ypos = float(pvStateValues[17].getElementsByTagName('SubindexedValue')[1].getAttribute('value'))
             self.position = [int(ypos/self.pixelSize[0]),int(xpos/self.pixelSize[1]),int(zpos[0]/self.pixelSize[2])] 
         elif fileType=='Numpy Array (*npy)':
-            self.data = np.load(filePath)
+            self.fileType = 'numpy'
+            self.filePath = filePath
+            d = np.load(filePath)
+            numImg = d.shape[2] if len(d.shape)>2 else 1
+            numCh = d.shape[3] if len(d.shape>3) else 1
+            self.shape = d.shape[:2]+(numImg,numCh)
+            if loadData:
+                self.data = self.formatData(d)
         elif fileType=='Allen Atlas (*.nrrd)':
-            self.data,_ = nrrd.read(filePath)
-            self.data = self.data.transpose((1,2,0))
+            self.fileType = 'atlas'
+            self.filePath = filePath
+            self.shape = (320,456,528,1)
+            if loadData:
+                self.data = self.getData()
             self.pixelSize = [25.0]*3
         
-        if self.data.dtype!='uint8':
-            self.data = make8bit(self.data)
-        
-        if len(self.data.shape)<3:
-            self.data = self.data[:,:,None,None]
-        elif len(self.data.shape)<4:
-            self.data = self.data[:,:,:,None]
-        
-        numCh = self.data.shape[3]
-        self.levels = [[0,255] for _ in range(numCh)]
-        self.gamma = [1]*numCh
-        self.alpha = [1]*numCh
-        self.rgbInd = [(0,1,2) for _ in range(numCh)]
-        
+        self.levels = [[0,255] for _ in range(self.shape[3])]
+        self.gamma = [1]*self.shape[3]
+        self.alpha = [1]*self.shape[3]
+        self.rgbInd = [(0,1,2) for _ in range(self.shape[3])]
         if not hasattr(self,'pixelSize'):
             self.pixelSize = [None]*3
         if not hasattr(self,'position'):
             self.position = None
             
+    def getData(self,channels=None,imageSlice=None):
+        # returns array with shape height x width x n x channels
+        if channels is None:
+            channels = list(range(self.shape[3]))
+        if imageSlice is None:
+            imageSlice = slice(0,self.shape[2])
+        if self.data is None:
+            if self.fileType=='image':
+                chInd = channels
+                imgInd = range(imageSlice.start,imageSlice.stop)
+                data = np.zeros(self.shape[:2]+(len(imgInd),len(chInd)),dtype=np.uint8)
+                for i,img in enumerate(imgInd):
+                    for c,ch in enumerate(chInd):
+                        d = cv2.imread(self.filePath[ch][img],cv2.IMREAD_ANYCOLOR)
+                        if len(d.shape)>2:
+                            data[:,:,i,:] = d[:,:,chInd[::-1]]
+                            break
+                        else:
+                            data[:,:,i,c] = d
+                return data
+            elif self.fileType=='numpy':
+                data = self.formatData(np.load(self.filePath))
+            elif self.fileType=='atlas':
+                data,_ = nrrd.read(self.filePath)
+                data = self.formatData(data.transpose((1,2,0)))
+        else:
+            data = self.data
+        return data[:,:,imageSlice,channels]
+        
+    def getDataIterator(self,channels,imageRange):
+        if self.data is None:
+            data = None if self.fileType=='image' else self.getData(channels,imageRange)
+        else:
+            data = self.data
+        for i in range(imageRange.start,imageRange.stop):
+            for ch in channels:
+                if data is None:
+                    d = cv2.imread(self.filePath[ch][i],cv2.IMREAD_ANYCOLOR)
+                    if len(d.shape)>2:
+                        for c in channels[::-1]:
+                            yield d[:,:,c]
+                    else:
+                        yield d
+                else:
+                    yield data[:,:,i,ch]
+        
+    def formatData(self,data):
+        if data.dtype!='uint8':
+            data = data.astype(float)
+            data *= 255/data.max()
+            data.round(out=data)
+            data = data.astype(np.uint8)
+        if len(data.shape)<3:
+            data = data[:,:,None,None]
+        elif len(data.shape)<4:
+            data = data[:,:,:,None]
+        return data
+            
     def flipX(self):
-        self.data = self.data[:,::-1]
+        if self.data is None:
+            pass
+        else:
+            self.data = self.data[:,::-1]
             
     def flipY(self):
-        self.data = self.data[::-1]
+        if self.data is None:
+            pass
+        else:
+            self.data = self.data[::-1]
         
     def flipZ(self):
-        self.data = self.data[:,:,::-1]
+        if self.data is None:
+            for chFiles in self.filePath:
+                chFiles.reverse()
+        else:
+            self.data = self.data[:,:,::-1]
         
     def rotate90(self):
-        self.data = np.rot90(self.data)
+        if self.data is None:
+            pass
+        else:
+            self.data = np.rot90(self.data)
                 
-                
-def make8bit(data):
-    data = data.astype(float)
-    data *= 255/data.max()
-    return data.round().astype(np.uint8)
-    
-    
+
 def setLayoutGridSpacing(layout,height,width,rows,cols):
     for row in range(rows):
         layout.setRowMinimumHeight(row,height/rows)
         layout.setRowStretch(row,1)
     for col in range(cols):
         layout.setColumnMinimumWidth(col,width/cols)
-        layout.setColumnStretch(col,1)
-            
+        layout.setColumnStretch(col,1)        
 
 def getSelectedItemsIndex(listbox):
     selectedItemsIndex = []
@@ -2030,6 +2121,16 @@ def getSelectedItemsIndex(listbox):
         if listbox.item(i).isSelected():
             selectedItemsIndex.append(i)
     return selectedItemsIndex
+        
+def drawContour(image,threshold=255,lineWidth=-1):
+    threshInd = image>=threshold
+    image[threshInd] = 1
+    image[np.logical_not(threshInd)] = 0
+    _,contours,_ = cv2.findContours(image,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    maxContour = np.argmax([cont.shape[0] for cont in contours])
+    cv2.drawContours(image,contours,maxContour,255,lineWidth)
+    image[image<255] = 0
+    return image
 
 
 if __name__=="__main__":
