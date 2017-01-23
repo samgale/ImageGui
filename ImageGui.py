@@ -698,10 +698,9 @@ class ImageGui():
             shape = tuple(int(round(shape[i]*scaleFactor)) for i in (0,1))+shape[2:]
             scaledData = np.zeros(shape,dtype=np.uint8)
             interpMethod = cv2.INTER_AREA if scaleFactor<1 else cv2.INTER_LINEAR
-            chInd = list(range(shape[3]))
-            dataIter = self.imageObjs[fileInd].getDataIterator(chInd,slice(0,shape[2]))
+            dataIter = self.imageObjs[fileInd].getDataIterator()
             for i in range(shape[2]):
-                for ch in chInd:
+                for ch in range(shape[3]):
                     scaledData[:,:,i,ch] = cv2.resize(next(dataIter),shape[1::-1],interpolation=interpMethod)
             self.imageObjs[fileInd].data = scaledData
             self.imageObjs[fileInd].shape = shape
@@ -794,7 +793,7 @@ class ImageGui():
         
     def setViewBoxRange(self,windows=None):
         # square viewBox rectangle to fill layout (or subregion if displaying mulitple image windows)
-        # adjust aspect to match image ranged
+        # adjust aspect to match image range
         if windows is None:
             windows = [self.selectedWindow]
         layoutRect = self.imageLayout.viewRect()
@@ -808,12 +807,13 @@ class ImageGui():
         else:
             top += (height-width)/2
         self.ignoreImageRangeChange = True
+        numDisplayedWindows = len(self.displayedWindows)
         for window in windows:
             x,y,size = left,top,width
-            if len(self.displayedWindows)>1:
+            if numDisplayedWindows>1:
                 size /= 2
                 position = self.displayedWindows.index(window)
-                if len(self.displayedWindows)<3:
+                if numDisplayedWindows<3:
                     x += size/2   
                 elif position in (2,3):
                     x += size
@@ -833,7 +833,7 @@ class ImageGui():
                     y += offset
                     size *= maxXYExtent/zExtent
             aspect = xExtent/yExtent
-            if (len(self.displayedWindows)!=2 and aspect>1) or (len(self.displayedWindows)==2 and aspect<1):
+            if (numDisplayedWindows!=2 and aspect>1) or (numDisplayedWindows==2 and aspect>2):
                 w = size
                 h = w/aspect
                 y += (w-h)/2
@@ -892,7 +892,7 @@ class ImageGui():
         axis = self.imageShapeIndex[window][2]
         if isProj:
             rng = (0,imageObj.shape[axis]-1) if self.stitchState[window] else self.imageRange[window][axis]
-            imgSlice = slice(rng[0],rng[1]+1)
+            rangeSlice = slice(rng[0],rng[1]+1)
         else:
             i = self.imageIndex[window][axis]
             if i<0:
@@ -901,22 +901,25 @@ class ImageGui():
                 i -= self.stitchPos[window,fileInd,axis]
                 if not 0<=i<imageObj.shape[axis]:
                     return
-            imgSlice = slice(i,i+1)
+            rangeSlice = slice(i,i+1)
         if axis==2:
-            data = imageObj.getData(channels,imgSlice).max(axis)
+            data = imageObj.getData(channels,rangeSlice).max(axis)
+        elif imageObj.data is None:
+            data = np.zeros([imageObj.shape[i] for i in self.imageShapeIndex[window][:2]]+[len(channels)],dtype=np.uint8)
+            dataIter = imageObj.getDataIterator(channels)
+            for i in range(imageObj.shape[2]):
+                for chInd,_ in enumerate(channels):
+                    if axis==1:
+                        data[:,i,chInd] = next(dataIter)[:,rangeSlice].max(axis)
+                    else:
+                        data[i,:,chInd] = next(dataIter)[rangeSlice,:].max(axis)
         elif axis==1:
-            if imageObj.data is None:
-                pass
-            else:
-                data = imageObj.data[:,imgSlice,:,channels].max(axis)
+            data = imageObj.data[:,rangeSlice,:,channels].max(axis)
         else:
-            if imageObj.data is None:
-                pass
-            else:
-                data = imageObj.data.transpose((0,2,1,3))[imgSlice,:,:,channels].max(axis)
+            data = imageObj.data.transpose((0,2,1,3))[rangeSlice,:,:,channels].max(axis)
         data = data.astype(float)
-        for ind,ch in enumerate(channels):
-            chData = data[:,:,ind]
+        for chInd,ch in enumerate(channels):
+            chData = data[:,:,chInd]
             if self.showBinaryState[window]:
                 aboveThresh = chData>=imageObj.levels[ch][1]
                 chData[aboveThresh] = 255
@@ -2023,16 +2026,16 @@ class ImageObj():
         if not hasattr(self,'position'):
             self.position = None
             
-    def getData(self,channels=None,imageSlice=None):
+    def getData(self,channels=None,rangeSlice=None):
         # returns array with shape height x width x n x channels
         if channels is None:
             channels = list(range(self.shape[3]))
-        if imageSlice is None:
-            imageSlice = slice(0,self.shape[2])
+        if rangeSlice is None:
+            rangeSlice = slice(0,self.shape[2])
         if self.data is None:
             if self.fileType=='image':
                 chInd = channels
-                imgInd = range(imageSlice.start,imageSlice.stop)
+                imgInd = range(rangeSlice.start,rangeSlice.stop)
                 data = np.zeros(self.shape[:2]+(len(imgInd),len(chInd)),dtype=np.uint8)
                 for i,img in enumerate(imgInd):
                     for c,ch in enumerate(chInd):
@@ -2050,14 +2053,18 @@ class ImageObj():
                 data = self.formatData(data.transpose((1,2,0)))
         else:
             data = self.data
-        return data[:,:,imageSlice,channels]
+        return data[:,:,rangeSlice,channels]
         
-    def getDataIterator(self,channels,imageRange):
+    def getDataIterator(self,channels=None,rangeSlice=None):
+        if channels is None:
+            channels = list(range(self.shape[3]))
+        if rangeSlice is None:
+            rangeSlice = slice(0,self.shape[2])
         if self.data is None:
-            data = None if self.fileType=='image' else self.getData(channels,imageRange)
+            data = None if self.fileType=='image' else self.getData(channels,rangeSlice)
         else:
             data = self.data
-        for i in range(imageRange.start,imageRange.stop):
+        for i in range(rangeSlice.start,rangeSlice.stop):
             for ch in channels:
                 if data is None:
                     d = cv2.imread(self.filePath[ch][i],cv2.IMREAD_ANYCOLOR)
