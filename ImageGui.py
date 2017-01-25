@@ -21,14 +21,18 @@ from PyQt4 import QtGui, QtCore
 import pyqtgraph as pg
 
 
-def start(data=None,label=None,mode=None):
+def start(data=None,label=None,autoColor=False,mode=None):
     app = QtGui.QApplication.instance()
     if app is None:
         app = QtGui.QApplication([])
     imageGuiObj = ImageGui(app)
     if data is not None:
         app.processEvents()
-        imageGuiObj.loadImageData(data,label)
+        if not isinstance(data,list):
+            data = [data]
+            label = [label]
+        for d,lab in zip(data,label):
+            imageGuiObj.loadImageData(d,lab,autoColor=autoColor)
         if mode=='channels':
             imageGuiObj.setViewChannelsOn()
         elif mode=='3D':
@@ -106,10 +110,11 @@ class ImageGui():
         
         # options menu
         self.optionsMenu = self.menuBar.addMenu('Options')
-        self.optionsMenuImportAsNeeded = QtGui.QAction('Import Data as Needed',self.mainWin,checkable=True)
+        self.optionsMenuImportPointers = QtGui.QAction('Import File Pointers Instead of Data',self.mainWin,checkable=True)
+        self.optionsMenuImportAutoColor = QtGui.QAction('Automatically Color Channels During Import',self.mainWin,checkable=True)
         self.optionsMenu3dLineColor = QtGui.QAction('Set View 3D Line Color',self.mainWin)
         self.optionsMenu3dLineColor.triggered.connect(self.setView3dLineColor)
-        self.optionsMenu.addActions([self.optionsMenuImportAsNeeded,self.optionsMenu3dLineColor])
+        self.optionsMenu.addActions([self.optionsMenuImportPointers,self.optionsMenuImportAutoColor,self.optionsMenu3dLineColor])
         
         # image menu
         self.imageMenu = self.menuBar.addMenu('Image')
@@ -171,7 +176,7 @@ class ImageGui():
         self.markPointsPlot = [pg.PlotDataItem(x=[],y=[],symbol='o',symbolBrush=None,pen=None) for _ in range(self.numWindows)]
         clickCallbacks = (self.window1ClickCallback,self.window2ClickCallback,self.window3ClickCallback,self.window4ClickCallback)
         doubleClickCallbacks = (self.window1DoubleClickCallback,self.window2DoubleClickCallback,self.window3DoubleClickCallback,self.window4DoubleClickCallback)
-        for viewBox,imgItem,ptsPlot,click,doubleClick in zip(self.imageViewBox,self.imageItem,self.markPointsPlot,clickCallbacks,doubleClickCallbacks):
+        for viewBox,imgItem,ptsPlot,click,doubleClick in reversed(zip(self.imageViewBox,self.imageItem,self.markPointsPlot,clickCallbacks,doubleClickCallbacks)):
             self.imageLayout.addItem(viewBox)
             viewBox.addItem(imgItem)
             viewBox.addItem(ptsPlot)
@@ -568,14 +573,15 @@ class ImageGui():
                             fpath = os.path.join(itemPath,f)
                             if minidom.parse(fpath).getElementsByTagName('Sequence').item(0).getAttribute('type') in ('ZSeries','Single'):
                                 filePaths.append(fpath)
+        loadData = not self.optionsMenuImportPointers.isChecked()
+        autoColor = self.optionsMenuImportAutoColor.isChecked()
         for filePath in filePaths:
-            self.loadImageData(filePath,fileType,numCh,chFileOrg)
+            self.loadImageData(filePath,fileType,numCh,chFileOrg,loadData,autoColor)
         
-    def loadImageData(self,filePath,fileType,numCh=None,chFileOrg=None):
+    def loadImageData(self,filePath,fileType,numCh=None,chFileOrg=None,loadData=True,autoColor=False):
         # filePath and fileType can also be a numpy array (Y x X x Z x Channels) and optional label, respectively
         # Provide numCh and chFileOrg if importing a multiple file image series
-        loadData = not self.optionsMenuImportAsNeeded.isChecked()
-        self.imageObjs.append(ImageObj(filePath,fileType,numCh,chFileOrg,loadData))
+        self.imageObjs.append(ImageObj(filePath,fileType,numCh,chFileOrg,loadData,autoColor))
         if isinstance(filePath,np.ndarray):
             label = 'data_'+time.strftime('%Y%m%d_%H%M%S') if fileType is None else fileType
         else:
@@ -762,8 +768,8 @@ class ImageGui():
                         self.highLevelLine.setValue(self.imageObjs[i].levels[channels[0]][1])
                         self.gammaEdit.setText(str(self.imageObjs[i].gamma[channels[0]]))
                         self.gammaSlider.setValue(self.imageObjs[i].gamma[channels[0]]*100)
-                        self.alphaEdit.setText(str(self.imageObjs[i].alpha[channels[0]]))
-                        self.alphaSlider.setValue(self.imageObjs[i].alpha[channels[0]]*100)
+                        self.alphaEdit.setText(str(self.imageObjs[i].alpha))
+                        self.alphaSlider.setValue(self.imageObjs[i].alpha*100)
                         isSet = True
             pixIntensityHist[pixIntensityHist<1] = 1
             pixIntensityHist = np.log10(pixIntensityHist)
@@ -860,20 +866,24 @@ class ImageGui():
         image = np.zeros((imageShape[0],imageShape[1],3))
         for fileInd in self.checkedFileIndex[window]:
             imageObj = self.imageObjs[fileInd]
-            if self.stitchCheckbox.isChecked():
+            if self.stitchState[window]:
                 i,j = (slice(self.stitchPos[window,fileInd,i],self.stitchPos[window,fileInd,i]+imageObj.shape[i]) for i in self.imageShapeIndex[window][:2])
             else:
                 i,j = (slice(0,imageObj.shape[i]) for i in self.imageShapeIndex[window][:2])
             channels = [ch for ch in self.selectedChannels[window] if ch<imageObj.shape[3]]
-            data = self.getImageData(imageObj,fileInd,window,channels)
+            data,alphaMap = self.getImageData(imageObj,fileInd,window,channels)
             if data is not None:
+                if not self.stitchState[window]:
+                    if alphaMap is not None:
+                        image *= 1-alphaMap
+                    if imageObj.alpha<1:
+                        image *= 1-imageObj.alpha
                 for ind,ch in enumerate(channels):
                     for k in imageObj.rgbInd[ch]:
-                        if self.stitchCheckbox.isChecked():
+                        if self.stitchState[window]:
                             image[i,j,k] = np.maximum(image[i,j,k],data[:,:,ind])
-                        elif imageObj.alpha[ch]<1:
-                            image[i,j,k] *= 1-imageObj.alpha[ch]
-                            image[i,j,k] += data[:,:,ind]*imageObj.alpha[ch]
+                        elif imageObj.alpha<1 or alphaMap is not None:
+                            image[i,j,k] += data[:,:,ind]
                         else:
                             image[i,j,k] = data[:,:,ind]
         if self.normState[window]:
@@ -896,28 +906,28 @@ class ImageGui():
         else:
             i = self.imageIndex[window][axis]
             if i<0:
-                return
+                return None,None
             if self.stitchState[window]:
                 i -= self.stitchPos[window,fileInd,axis]
                 if not 0<=i<imageObj.shape[axis]:
-                    return
+                    return None,None
             rangeSlice = slice(i,i+1)
         if axis==2:
-            data = imageObj.getData(channels,rangeSlice).max(axis)
+            data = imageObj.getData(channels,rangeSlice)
         elif imageObj.data is None:
             data = np.zeros([imageObj.shape[i] for i in self.imageShapeIndex[window][:2]]+[len(channels)],dtype=np.uint8)
             dataIter = imageObj.getDataIterator(channels)
             for i in range(imageObj.shape[2]):
                 for chInd,_ in enumerate(channels):
                     if axis==1:
-                        data[:,i,chInd] = next(dataIter)[:,rangeSlice].max(axis)
+                        data[:,i,chInd] = next(dataIter)[:,rangeSlice]
                     else:
-                        data[i,:,chInd] = next(dataIter)[rangeSlice,:].max(axis)
+                        data[i,:,chInd] = next(dataIter)[rangeSlice,:]
         elif axis==1:
-            data = imageObj.data[:,rangeSlice,:,channels].max(axis)
+            data = imageObj.data[:,rangeSlice,:,channels]
         else:
-            data = imageObj.data.transpose((0,2,1,3))[rangeSlice,:,:,channels].max(axis)
-        data = data.astype(float)
+            data = imageObj.data[rangeSlice,:,:,channels].transpose((0,2,1,3))
+        data = data.max(axis).astype(float)
         for chInd,ch in enumerate(channels):
             chData = data[:,:,chInd]
             if self.showBinaryState[window]:
@@ -934,7 +944,20 @@ class ImageGui():
                     chData /= 255
                     chData **= imageObj.gamma[ch]
                     chData *= 255
-        return data
+        if imageObj.alphaMap is None:
+            alphaMap = None
+        else:
+            if axis==2:
+                alphaMap = imageObj.alphaMap[:,:,rangeSlice]
+            elif axis==1:
+                alphaMap = imageObj.alphaMap[:,rangeSlice,:]
+            else:
+                alphaMap = imageObj.alphaMap[rangeSlice,:,:].transpose((0,2,1))
+            alphaMap = (alphaMap.max(axis).astype(float)/255)[:,:,None]
+            data *= alphaMap
+        if imageObj.alpha<1:
+            data *= imageObj.alpha
+        return data,alphaMap
         
     def getAtlasRegion(self,window,region):
         isProj = self.sliceProjState[window]
@@ -969,7 +992,7 @@ class ImageGui():
         self.selectedAtlasRegions[self.selectedWindow] = []
         for ind,region in enumerate(self.atlasRegionMenu):
             if region.isChecked():
-                windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindows]
+                windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
                 for window in windows:
                     self.selectedAtlasRegions[window].append(ind)
         self.displayImage(windows)
@@ -979,7 +1002,7 @@ class ImageGui():
             for region in self.atlasRegionMenu:
                 if region.isChecked():
                     region.setChecked(False)
-            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindows]
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
             for window in windows:
                 self.selectedAtlasRegions[window] = []
             if updateImage:
@@ -995,7 +1018,7 @@ class ImageGui():
             else: # >
                 self.setImageNum(axis,imgInd+1)
         elif self.stitchCheckbox.isChecked() and key in (16777237,16777235,16777234,16777236,45,61):
-            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindows]
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
             fileInd = list(set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex))
             moveAxis,moveDist = self.getMoveParams(self.selectedWindow,key)
             self.stitchPos[windows,fileInd,moveAxis] += moveDist
@@ -1340,9 +1363,12 @@ class ImageGui():
             self.viewChannelsSelectedCh = self.channelListbox.currentRow()
             self.displayImageLevels()
         else:
-            self.selectedChannels[self.selectedWindow] = getSelectedItemsIndex(self.channelListbox)
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+            channels = getSelectedItemsIndex(self.channelListbox)
+            for window in windows:
+                self.selectedChannels[window] = channels
             self.displayImageLevels()
-            self.displayImage()
+            self.displayImage(windows)
         
     def updateChannelList(self):
         self.channelListbox.blockSignals(True)
@@ -1706,22 +1732,28 @@ class ImageGui():
                 if ch<self.imageObjs[fileInd].shape[3]:
                     self.imageObjs[fileInd].levels[ch] = [0,255]
                     self.imageObjs[fileInd].gamma[ch] = 1
-                    self.imageObjs[fileInd].alpha[ch] = 1
+            self.imageObjs[fileInd].alpha = 1
         self.displayImage(self.getAffectedWindows(channels))
         
     def normDisplayCheckboxCallback(self):
-        self.normState[self.selectedWindow] = not self.normState[self.selectedWindow]
+        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+        for window in windows:
+            self.normState[window] = self.normDisplayCheckbox.isChecked()
+            if self.normState[window]:
+                self.showBinaryState[window] = False
         if self.normState[self.selectedWindow] and self.showBinaryState[self.selectedWindow]:
-            self.showBinaryState[self.selectedWindow] = False
             self.showBinaryCheckbox.setChecked(False)
-        self.displayImage()
+        self.displayImage(windows)
         
     def showBinaryCheckboxCallback(self):
-        self.showBinaryState[self.selectedWindow] = not self.showBinaryState[self.selectedWindow]
+        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+        for window in windows:
+            self.showBinaryState[window] = self.showBinaryCheckbox.isChecked()
+            if self.showBinaryState[window]:
+                self.normState[window] = False
         if self.showBinaryState[self.selectedWindow] and self.normState[self.selectedWindow]:
-            self.normState[self.selectedWindow] = False
             self.normDisplayCheckbox.setChecked(False)
-        self.displayImage()
+        self.displayImage(windows)
         
     def gammaEditCallback(self):
         newVal = round(float(self.gammaEdit.text()),2)
@@ -1762,12 +1794,9 @@ class ImageGui():
         self.setAlpha(newVal)
         
     def setAlpha(self,newVal):
-        channels = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannels[self.selectedWindow]
         for fileInd in self.selectedFileIndex:
-            for ch in channels:
-                if ch<self.imageObjs[fileInd].shape[3]:
-                    self.imageObjs[fileInd].alpha[ch] = newVal
-        self.displayImage(self.getAffectedWindows(channels))
+            self.imageObjs[fileInd].alpha = newVal
+        self.displayImage(self.getAffectedWindows())
         
     def plotMarkedPoints(self,windows=None):
         if windows is None:
@@ -1937,13 +1966,19 @@ class ImageGui():
 
 class ImageObj():
     
-    def __init__(self,filePath,fileType,numCh,chFileOrg,loadData):
+    def __init__(self,filePath,fileType,numCh,chFileOrg,loadData,autoColor):
         self.data = None
+        self.alpha = 1
+        self.alphaMap = None
+        self.pixelSize = [None]*3
+        self.position = None
         if isinstance(filePath,np.ndarray):
             self.fileType = 'data'
             self.filePath = None
+            d = filePath
             self.data = self.formatData(filePath)
             self.shape = self.data.shape
+            self.setAlphaMap(d)
         elif fileType=='Images (*.tif *.jpg *.png)':
             self.fileType = 'image'
             d = cv2.imread(filePath,cv2.IMREAD_ANYCOLOR)
@@ -2007,6 +2042,7 @@ class ImageObj():
             numImg = d.shape[2] if len(d.shape)>2 else 1
             numCh = d.shape[3] if len(d.shape>3) else 1
             self.shape = d.shape[:2]+(numImg,numCh)
+            self.setAlphaMap(data=d)
             if loadData:
                 self.data = self.formatData(d)
         elif fileType=='Allen Atlas (*.nrrd)':
@@ -2016,15 +2052,12 @@ class ImageObj():
             if loadData:
                 self.data = self.getData()
             self.pixelSize = [25.0]*3
-        
         self.levels = [[0,255] for _ in range(self.shape[3])]
         self.gamma = [1]*self.shape[3]
-        self.alpha = [1]*self.shape[3]
         self.rgbInd = [(0,1,2) for _ in range(self.shape[3])]
-        if not hasattr(self,'pixelSize'):
-            self.pixelSize = [None]*3
-        if not hasattr(self,'position'):
-            self.position = None
+        if autoColor:
+            for ch in range(self.shape[3])[:3]:
+                self.rgbInd[ch] = (ch,)            
             
     def getData(self,channels=None,rangeSlice=None):
         # returns array with shape height x width x n x channels
@@ -2079,7 +2112,7 @@ class ImageObj():
     def formatData(self,data):
         if data.dtype!='uint8':
             data = data.astype(float)
-            data *= 255/data.max()
+            data *= 255/np.nanmax(data)
             data.round(out=data)
             data = data.astype(np.uint8)
         if len(data.shape)<3:
@@ -2087,6 +2120,16 @@ class ImageObj():
         elif len(data.shape)<4:
             data = data[:,:,:,None]
         return data
+        
+    def setAlphaMap(self,data):
+        if len(data.shape)<3:
+            data = data[:,:,None]
+        elif len(data.shape)>3:
+            data = data[:,:,:,0]
+        ind = np.isnan(data)
+        if ind.any():
+            self.alphaMap = np.zeros(self.shape[:3],dtype=np.uint8)
+            self.alphaMap[np.logical_not(ind)] = 255
             
     def flipX(self):
         if self.data is None:
