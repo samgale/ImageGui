@@ -176,7 +176,7 @@ class ImageGui():
         self.markPointsPlot = [pg.PlotDataItem(x=[],y=[],symbol='o',symbolBrush=None,pen=None) for _ in range(self.numWindows)]
         clickCallbacks = (self.window1ClickCallback,self.window2ClickCallback,self.window3ClickCallback,self.window4ClickCallback)
         doubleClickCallbacks = (self.window1DoubleClickCallback,self.window2DoubleClickCallback,self.window3DoubleClickCallback,self.window4DoubleClickCallback)
-        for viewBox,imgItem,ptsPlot,click,doubleClick in reversed(zip(self.imageViewBox,self.imageItem,self.markPointsPlot,clickCallbacks,doubleClickCallbacks)):
+        for viewBox,imgItem,ptsPlot,click,doubleClick in reversed(tuple(zip(self.imageViewBox,self.imageItem,self.markPointsPlot,clickCallbacks,doubleClickCallbacks))):
             self.imageLayout.addItem(viewBox)
             viewBox.addItem(imgItem)
             viewBox.addItem(ptsPlot)
@@ -610,6 +610,7 @@ class ImageGui():
         self.setViewBoxRangeLimits()
         self.setViewBoxRange(self.displayedWindows)
         self.displayImage()
+        self.imageViewBox[self.selectedWindow].setZValue(1)
         if self.zoomPanButton.isChecked():
             self.imageViewBox[self.selectedWindow].setMouseEnabled(x=True,y=True)
         
@@ -626,6 +627,7 @@ class ImageGui():
         self.displayedWindows.remove(window)
         self.imageItem[window].setImage(np.zeros((2,2,3),dtype=np.uint8).transpose((1,0,2)),autoLevels=False)
         self.imageViewBox[window].setMouseEnabled(x=False,y=False)
+        self.imageViewBox[window].setZValue(0)
         self.clearMarkedPoints([window])
         self.alignRefWindow[window] = None
         if window==self.selectedWindow:
@@ -1544,6 +1546,7 @@ class ImageGui():
         self.displayImage(self.displayedWindows)
         isZoom = self.zoomPanButton.isChecked()
         for window in self.displayedWindows:
+            self.imageViewBox[window].setZValue(1)
             self.imageViewBox[window].setMouseEnabled(x=isZoom,y=isZoom)
             
     def setLinkedViewOff(self):
