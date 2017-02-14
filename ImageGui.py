@@ -17,6 +17,7 @@ sip.setapi('QString', 2)
 import os, time, math, cv2, nrrd
 from xml.dom import minidom
 import numpy as np
+import scipy.io
 from PyQt4 import QtGui, QtCore
 import pyqtgraph as pg
 
@@ -31,6 +32,8 @@ def start(data=None,label=None,autoColor=False,mode=None):
         if not isinstance(data,list):
             data = [data]
             label = [label]
+        elif label is None:
+            label = [None]*len(data)
         for d,lab in zip(data,label):
             imageGuiObj.loadImageData(d,lab,autoColor=autoColor)
         if mode=='channels':
@@ -104,9 +107,16 @@ class ImageGui():
         self.fileMenuSave = self.fileMenu.addMenu('Save')
         self.fileMenuSaveImage = QtGui.QAction('Image',self.mainWin)
         self.fileMenuSaveImage.triggered.connect(self.saveImage)
-        self.fileMenuSaveVolume = QtGui.QAction('Volume',self.mainWin)
-        self.fileMenuSaveVolume.triggered.connect(self.saveVolume)
-        self.fileMenuSave.addActions([self.fileMenuSaveImage,self.fileMenuSaveVolume])
+        self.fileMenuSave.addAction(self.fileMenuSaveImage)
+        
+        self.fileMenuSaveVolume = self.fileMenuSave.addMenu('Volume')
+        self.fileMenuSaveVolumeImages = QtGui.QAction('Images',self.mainWin)
+        self.fileMenuSaveVolumeImages.triggered.connect(self.saveVolume)
+        self.fileMenuSaveVolumeNpz = QtGui.QAction('npz',self.mainWin)
+        self.fileMenuSaveVolumeNpz.triggered.connect(self.saveVolume)
+        self.fileMenuSaveVolumeMat = QtGui.QAction('mat',self.mainWin)
+        self.fileMenuSaveVolumeMat.triggered.connect(self.saveVolume)
+        self.fileMenuSaveVolume.addActions([self.fileMenuSaveVolumeImages,self.fileMenuSaveVolumeNpz,self.fileMenuSaveVolumeMat])
         
         # options menu
         self.optionsMenu = self.menuBar.addMenu('Options')
@@ -530,16 +540,35 @@ class ImageGui():
         cv2.imwrite(filePath,self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1,::-1])
         
     def saveVolume(self):
-        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.tif')
+        if self.mainWin.sender()==self.fileMenuSaveVolumeImages:
+            fileType = 'tif'
+        elif self.mainWin.sender()==self.fileMenuSaveVolumeNpz:
+            fileType = 'npz'
+        else:
+            fileType = 'mat'
+        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.'+fileType)
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
-        imageIndex = self.imageIndex[self.selectedWindow]
-        yRange,xRange,zRange = [self.imageRange[self.selectedWindow][axis] for axis in self.imageShapeIndex[self.selectedWindow]]
-        for i in range(zRange[0],zRange[1]+1):
-            self.imageIndex[self.selectedWindow] = i
-            cv2.imwrite(filePath[:-4]+'_'+str(i)+'.tif',self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1,::-1])
-        self.imageIndex[self.selectedWindow] = imageIndex
+        axis = self.imageShapeIndex[self.selectedWindow][-1]
+        imageIndex = self.imageIndex[self.selectedWindow][axis]
+        yRange,xRange,zRange = [self.imageRange[self.selectedWindow][ax] for ax in self.imageShapeIndex[self.selectedWindow]]
+        if fileType!='tif':
+            data = np.zeros([r[1]-r[0]+1 for r in (zRange,yRange,xRange)]+[3],dtype=np.uint8)
+        for i,imgInd in enumerate(range(zRange[0],zRange[1]+1)):
+            self.imageIndex[self.selectedWindow][axis] = imgInd
+            img = self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1]
+            if fileType=='tif':
+                cv2.imwrite(filePath[:-4]+'_'+str(i)+'.tif',img[:,:,::-1])
+            else:
+                data[i] = img
+        self.imageIndex[self.selectedWindow][axis] = imageIndex
+        if fileType!='tif':
+            data = {'imageData':data}
+            if fileType=='npz':
+                np.savez_compressed(filePath,**data)
+            else:
+                scipy.io.savemat(filePath,data,do_compression=True)
                    
     def openFile(self):
         filePaths,fileType = QtGui.QFileDialog.getOpenFileNamesAndFilter(self.mainWin,'Choose File(s)',self.fileOpenPath,'Images (*.tif *.jpg *.png);;Image Series (*.tif *.jpg *.png);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml);;Numpy Array (*npy);;Allen Atlas (*.nrrd)',self.fileOpenType)
