@@ -112,11 +112,13 @@ class ImageGui():
         self.fileMenuSaveVolume = self.fileMenuSave.addMenu('Volume')
         self.fileMenuSaveVolumeImages = QtGui.QAction('Images',self.mainWin)
         self.fileMenuSaveVolumeImages.triggered.connect(self.saveVolume)
+        self.fileMenuSaveVolumeMovie = QtGui.QAction('Movie',self.mainWin)
+        self.fileMenuSaveVolumeMovie.triggered.connect(self.saveVolume)
         self.fileMenuSaveVolumeNpz = QtGui.QAction('npz',self.mainWin)
         self.fileMenuSaveVolumeNpz.triggered.connect(self.saveVolume)
         self.fileMenuSaveVolumeMat = QtGui.QAction('mat',self.mainWin)
         self.fileMenuSaveVolumeMat.triggered.connect(self.saveVolume)
-        self.fileMenuSaveVolume.addActions([self.fileMenuSaveVolumeImages,self.fileMenuSaveVolumeNpz,self.fileMenuSaveVolumeMat])
+        self.fileMenuSaveVolume.addActions([self.fileMenuSaveVolumeImages,self.fileMenuSaveVolumeMovie,self.fileMenuSaveVolumeNpz,self.fileMenuSaveVolumeMat])
         
         # options menu
         self.optionsMenu = self.menuBar.addMenu('Options')
@@ -540,9 +542,12 @@ class ImageGui():
         cv2.imwrite(filePath,self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1,::-1])
         
     def saveVolume(self):
-        if self.mainWin.sender()==self.fileMenuSaveVolumeImages:
+        source = self.mainWin.sender()
+        if source==self.fileMenuSaveVolumeImages:
             fileType = 'tif'
-        elif self.mainWin.sender()==self.fileMenuSaveVolumeNpz:
+        elif source==self.fileMenuSaveVolumeMovie:
+            fileType = 'avi'
+        elif source==self.fileMenuSaveVolumeNpz:
             fileType = 'npz'
         else:
             fileType = 'mat'
@@ -553,17 +558,27 @@ class ImageGui():
         axis = self.imageShapeIndex[self.selectedWindow][-1]
         imageIndex = self.imageIndex[self.selectedWindow][axis]
         yRange,xRange,zRange = [self.imageRange[self.selectedWindow][ax] for ax in self.imageShapeIndex[self.selectedWindow]]
-        if fileType!='tif':
-            data = np.zeros([r[1]-r[0]+1 for r in (zRange,yRange,xRange)]+[3],dtype=np.uint8)
+        volumeShape = tuple(r[1]-r[0]+1 for r in (yRange,xRange,zRange))
+        if fileType=='avi':
+            frameRate,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Set Frame Rate','Frames/s',30)
+            if not ok:
+                return
+            vidOut = cv2.VideoWriter(filePath,-1,frameRate,volumeShape[1::-1])
+        elif fileType in ('npz','mat'):
+            data = np.zeros(volumeShape+(3,),dtype=np.uint8)
         for i,imgInd in enumerate(range(zRange[0],zRange[1]+1)):
             self.imageIndex[self.selectedWindow][axis] = imgInd
             img = self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1]
             if fileType=='tif':
                 cv2.imwrite(filePath[:-4]+'_'+str(i)+'.tif',img[:,:,::-1])
+            elif fileType=='avi':
+                vidOut.write(img)
             else:
                 data[i] = img
         self.imageIndex[self.selectedWindow][axis] = imageIndex
-        if fileType!='tif':
+        if fileType=='avi':
+            vidOut.release()
+        elif fileType in ('npz','mat'):
             data = {'imageData':data}
             if fileType=='npz':
                 np.savez_compressed(filePath,**data)
@@ -1020,11 +1035,11 @@ class ImageGui():
             self.fileSavePath = os.path.dirname(filePath)
             self.atlasAnnotationData,_ = nrrd.read(filePath)
             self.atlasAnnotationData = self.atlasAnnotationData.transpose((1,2,0))
-        self.selectedAtlasRegions[self.selectedWindow] = []
-        for ind,region in enumerate(self.atlasRegionMenu):
-            if region.isChecked():
-                windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
-                for window in windows:
+        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+        for window in windows:
+            self.selectedAtlasRegions[window] = []
+            for ind,region in enumerate(self.atlasRegionMenu):
+                if region.isChecked():
                     self.selectedAtlasRegions[window].append(ind)
         self.displayImage(windows)
         
@@ -1036,7 +1051,7 @@ class ImageGui():
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
             for window in windows:
                 self.selectedAtlasRegions[window] = []
-            if updateImage:
+            if updateImage or self.mainWin.sender() is not None:
                 self.displayImage(windows)
         
     def mainWinKeyPressCallback(self,event):
