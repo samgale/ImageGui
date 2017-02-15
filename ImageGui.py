@@ -78,7 +78,7 @@ class ImageGui():
         self.selectedPoint = None
         self.selectedPointWindow = None
         self.alignRefWindow = [None]*self.numWindows
-        self.alignRange = [None]*self.numWindows
+        self.alignRange = [[None,None] for _ in range(self.numWindows)]
         self.alignAxis = [None]*self.numWindows
         self.alignIndex = [None]*self.numWindows
         
@@ -462,10 +462,12 @@ class ImageGui():
         self.alignStartLabel = QtGui.QLabel('Start')
         self.alignStartEdit = QtGui.QLineEdit('')
         self.alignStartEdit.setAlignment(QtCore.Qt.AlignHCenter)
+        self.alignStartEdit.editingFinished.connect(self.alignStartEditCallback)
         
         self.alignEndLabel = QtGui.QLabel('End')
         self.alignEndEdit = QtGui.QLineEdit('')
         self.alignEndEdit.setAlignment(QtCore.Qt.AlignHCenter)
+        self.alignEndEdit.editingFinished.connect(self.alignEndEditCallback)
         
         self.alignCheckbox = QtGui.QCheckBox('Align')
         self.alignCheckbox.clicked.connect(self.alignCheckboxCallback)
@@ -1381,7 +1383,7 @@ class ImageGui():
         self.fillPointsTable()
         isAligned = self.alignRefWindow[window] is not None
         self.alignCheckbox.setChecked(isAligned)
-        alignRange = [str(self.alignRange[window][i]+1) for i in (0,1)] if isAligned else ('','')
+        alignRange = [str(self.alignRange[window][i]+1) if self.alignRange[window][i] is not None else '' for i in (0,1)]
         self.alignStartEdit.setText(alignRange[0])
         self.alignEndEdit.setText(alignRange[1])
         self.displayImageInfo()
@@ -1946,23 +1948,21 @@ class ImageGui():
         if self.alignCheckbox.isChecked():
             refWin = self.alignRefMenu.currentIndex()
             axis = self.imageShapeIndex[self.selectedWindow][2]
-            refSize = self.imageShape[refWin][axis]
-            start,end = int(self.alignStartEdit.text())-1,int(self.alignEndEdit.text())-1
+            start,end = self.alignRange[self.selectedWindow]
             reverse = False
             if start>end:
                 start,end = end,start
                 reverse = True
-            if start<0 or end>=refSize:
+            if start<0 or end>=self.imageShape[refWin][axis]:
                 self.alignCheckbox.setChecked(False)
-                raise Warning('Align start and end must be between 0 and the reference image axis length')
+                raise Warning('Align start and end must be between 1 and the reference image axis length')
             self.alignRefWindow[self.selectedWindow] = refWin
-            self.alignRange[self.selectedWindow] = [end,start] if reverse else [start,end]
             self.alignAxis[self.selectedWindow] = axis
             n = end-start+1
             rng = self.imageRange[self.selectedWindow][axis]
             interval = n/(rng[1]-rng[0]+1)
             alignInd = np.arange(n)/interval+rng[0]
-            self.alignIndex[self.selectedWindow] = -np.ones(refSize,dtype=int)
+            self.alignIndex[self.selectedWindow] = -np.ones(self.imageShape[refWin][axis],dtype=int)
             self.alignIndex[self.selectedWindow][start:end+1] = alignInd[::-1] if reverse else alignInd
         else:
             self.alignRefWindow[self.selectedWindow] = None
@@ -1980,6 +1980,12 @@ class ImageGui():
             if self.alignAxis[self.selectedWindow]==axis:
                 self.imageIndex[self.alignRefWindow[window]][axis] = np.where(self.alignIndex[window]==self.imageIndex[window][axis])[0][0]
                 self.displayImage([self.alignRefWindow[window]])
+                
+    def alignStartEditCallback(self):
+        self.alignRange[self.selectedWindow][0] = int(self.alignStartEdit.text())-1
+        
+    def alignEndEditCallback(self):
+        self.alignRange[self.selectedWindow][1] = int(self.alignEndEdit.text())-1
     
     def transformButtonCallback(self):
         imageContours = []
