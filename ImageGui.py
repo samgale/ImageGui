@@ -837,14 +837,15 @@ class ImageGui():
         for fileInd in self.checkedFileIndex[self.selectedWindow]:
             dataIter = self.imageObjs[fileInd].getDataIterator(rangeSlice=slice(rng[0],rng[1]+1))
             ccfData = np.zeros(refShape+(self.imageObjs[fileInd].shape[3],),dtype=np.uint8)
-            for i in range(rng[0]-1,rng[1]):
-                ind = np.where(self.alignIndex[self.selectedWindow]==i)[0]
+            for i in range(rng[0],rng[1]+1):
+                alignInd = np.where(self.alignIndex[self.selectedWindow]==i)[0]
                 for ch in range(ccfData.shape[3]):
-                    ccfData[:,:,ind[0]+ind.size//2,ch] = next(dataIter)
+                    img = next(dataIter)
+                    for ind in alignInd:
+                        ccfData[:,:,ind,ch] = img
             self.imageObjs[fileInd].data = ccfData
             self.imageObjs[fileInd].shape = ccfData.shape
-        imgInd = np.where(self.alignIndex[self.selectedWindow]==rng[0])[0]
-        self.imageIndex[self.selectedWindow][2] = imgInd[0]+imgInd.size//2
+        self.imageIndex[self.selectedWindow][2] = np.where(self.alignIndex[self.selectedWindow]==rng[0])[0][0]
         self.alignRefWindow[self.selectedWindow] = None
         self.alignCheckbox.setChecked(False)
         self.imageShape[self.selectedWindow] = refShape
