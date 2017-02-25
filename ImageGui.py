@@ -6,7 +6,8 @@ Find Allen common coordinate framework data here:
 http://help.brain-map.org/display/mouseconnectivity/API
 http://download.alleninstitute.org/informatics-archive/current-release/mouse_ccf/average_template/
 http://download.alleninstitute.org/informatics-archive/current-release/mouse_ccf/ara_nissl/
-http://download.alleninstitute.org/informatics-archive/current-release/mouse_ccf/annotation/ccf_2015/
+http://download.alleninstitute.org/informatics-archive/current-release/mouse_ccf/annotation/ccf_2016/
+http://api.brain-map.org/api/v2/structure_graph_download/1.json
 
 @author: samgale
 """
@@ -173,8 +174,8 @@ class ImageGui():
         self.atlasMenu = self.menuBar.addMenu('Atlas')
         self.atlasMenuSelect = self.atlasMenu.addMenu('Select Regions')
         self.atlasAnnotationData = None
-        self.atlasRegionLabels = ('LGd','LGv','LP','LD','VISp','VISpl','VISpm','VISli','VISpor')
-        self.atlasRegionIDs = (170,178,218,155,(593,821,721,778,33,305),(750,269,869,902,377,393),(805,41,501,565,257,469),(312782578,312782582,312782586,312782590,312782594,312782598),(312782632,312782636,312782640,312782644,312782648,312782652))
+        self.atlasRegionLabels = ('SCs','LGd','LGv','LP','LD','VISal','VISam','VISl','VISp','VISpl','VISpm','VISli','VISpor')
+        self.atlasRegionIDs = ((834,842,851),170,178,218,155,(1074,905,1114,233,601,649),(281,1066,401,433,1046,441),(421,973,573,613,74,121),(593,821,721,778,33,305),(750,269,869,902,377,393),(805,41,501,565,257,469),(312782578,312782582,312782586,312782590,312782594,312782598),(312782632,312782636,312782640,312782644,312782648,312782652))
         self.atlasRegionMenu = []
         for region in self.atlasRegionLabels:
             self.atlasRegionMenu.append(QtGui.QAction(region,self.mainWin,checkable=True))
