@@ -49,7 +49,7 @@ class ImageGui():
     def __init__(self,app):
         self.app = app
         self.fileOpenPath = os.path.dirname(os.path.realpath(__file__))
-        self.fileOpenType = 'Images (*.tif *.jpg)'
+        self.fileOpenType = 'Image (*.tif  *png *.jpg *.jp2)'
         self.fileSavePath = self.fileOpenPath
         self.plotColorOptions = ('Reg','Green','Blue','Cyan','Yellow','Magenta','Black','White')
         self.plotColors = ('r','g','b','c','y','m','k','w')
@@ -60,6 +60,7 @@ class ImageGui():
         self.selectedWindow = 0
         self.displayedWindows = []
         self.selectedChannels = [[] for _ in range(self.numWindows)]
+        self.displayDownsample = [1]*self.numWindows
         self.sliceProjState = [0]*self.numWindows
         self.xyzState = [2]*self.numWindows
         self.ignoreImageRangeChange = False
@@ -82,6 +83,7 @@ class ImageGui():
         self.alignRange = [[None,None] for _ in range(self.numWindows)]
         self.alignAxis = [None]*self.numWindows
         self.alignIndex = [None]*self.numWindows
+        self.minContourVertices = 5
         
         # main window
         winHeight = 400
@@ -166,9 +168,40 @@ class ImageGui():
         self.imageMenuRotate90.triggered.connect(self.rotateImage90)
         self.imageMenuTransform = QtGui.QAction('Transform',self.mainWin)
         self.imageMenuTransform.triggered.connect(self.transformImage)
+        self.imageMenuWarp = QtGui.QAction('Warp',self.mainWin)
+        self.imageMenuWarp.triggered.connect(self.warpImage)
         self.imageMenuMakeCCF = QtGui.QAction('Make CCF Volume',self.mainWin)
         self.imageMenuMakeCCF.triggered.connect(self.makeCCFVolume)
-        self.imageMenu.addActions([self.imageMenuRotate90,self.imageMenuTransform,self.imageMenuMakeCCF])
+        self.imageMenu.addActions([self.imageMenuRotate90,self.imageMenuTransform,self.imageMenuWarp,self.imageMenuMakeCCF])
+        
+        # analysis menu
+        self.analysisMenu = self.menuBar.addMenu('Analysis')
+        self.analysisMenuMeasure = self.analysisMenu.addMenu('Measure Points')
+        self.analysisMenuMeasurePrint = QtGui.QAction('Print',self.mainWin)
+        self.analysisMenuMeasureClipboard = QtGui.QAction('Send To Clipboard',self.mainWin)
+        self.analysisMenuMeasureSave = QtGui.QAction('Save',self.mainWin)
+        self.analysisMenuMeasure.addActions([self.analysisMenuMeasurePrint,self.analysisMenuMeasureClipboard,self.analysisMenuMeasureSave])
+        
+        self.analysisMenuContours = self.analysisMenu.addMenu('Contours')
+        self.analysisMenuContoursFind = self.analysisMenuContours.addMenu('Find')
+        self.analysisMenuContoursFindContours = QtGui.QAction('Contours',self.mainWin)
+        self.analysisMenuContoursFindContours.triggered.connect(self.getContours)
+        self.analysisMenuContoursFindConvexHull = QtGui.QAction('Convex Hull',self.mainWin)
+        self.analysisMenuContoursFindConvexHull.triggered.connect(self.getContours)
+        self.analysisMenuContoursFindRectangle = QtGui.QAction('Bounding Rectangle',self.mainWin)
+        self.analysisMenuContoursFindRectangle.triggered.connect(self.getContours)
+        self.analysisMenuContoursFind.addActions([self.analysisMenuContoursFindContours,self.analysisMenuContoursFindConvexHull,self.analysisMenuContoursFindRectangle])
+        self.analysisMenuContoursMinVertices = QtGui.QAction('Minimum Vertices',self.mainWin)
+        self.analysisMenuContoursMinVertices.triggered.connect(self.setMinContourVertices)
+        self.analysisMenuContoursMerge = self.analysisMenuContours.addMenu('Merge')
+        self.analysisMenuContoursMergeHorz = QtGui.QAction('Horizontal',self.mainWin,checkable=True)
+        self.analysisMenuContoursMergeHorz.triggered.connect(self.setMergeContours)
+        self.analysisMenuContoursMergeVert = QtGui.QAction('Vertical',self.mainWin,checkable=True)
+        self.analysisMenuContoursMergeVert.triggered.connect(self.setMergeContours)
+        self.analysisMenuContoursMerge.addActions([self.analysisMenuContoursMergeHorz,self.analysisMenuContoursMergeVert])
+        self.analysisMenuContoursSave = QtGui.QAction('Save ROIs as Images',self.mainWin)
+        self.analysisMenuContoursSave.triggered.connect(self.saveContours)
+        self.analysisMenuContours.addActions([self.analysisMenuContoursMinVertices,self.analysisMenuContoursSave])
         
         # atlas menu
         self.atlasMenu = self.menuBar.addMenu('Atlas')
@@ -258,6 +291,11 @@ class ImageGui():
         self.windowChannelLayout.addWidget(self.channelListbox,1,2,4,1)
         
         # view control
+        self.downsampleLabel = QtGui.QLabel('Display Downsample Interval')
+        self.downsampleEdit = QtGui.QLineEdit('1')
+        self.downsampleEdit.setAlignment(QtCore.Qt.AlignHCenter)
+        self.downsampleEdit.editingFinished.connect(self.downsampleEditCallback)
+        
         self.imageDimensionsLabel = QtGui.QLabel('XYZ Dimensions: ')
         self.imagePixelSizeLabel = QtGui.QLabel('XYZ Pixel Size (\u03BCm): ')        
         
@@ -291,12 +329,14 @@ class ImageGui():
         self.view3dCheckbox.clicked.connect(self.view3dCheckboxCallback)
         
         self.viewControlLayout = QtGui.QGridLayout()
-        self.viewControlLayout.addWidget(self.imageDimensionsLabel,0,0,1,3)
-        self.viewControlLayout.addWidget(self.imagePixelSizeLabel,1,0,1,3)
-        self.viewControlLayout.addWidget(self.viewChannelsCheckbox,2,0,1,1)
-        self.viewControlLayout.addWidget(self.view3dCheckbox,2,1,1,1)
-        self.viewControlLayout.addWidget(self.sliceProjGroupBox,3,0,2,2)
-        self.viewControlLayout.addWidget(self.xyzGroupBox,2,2,3,1)
+        self.viewControlLayout.addWidget(self.downsampleLabel,0,0,1,2)
+        self.viewControlLayout.addWidget(self.downsampleEdit,0,2,1,1)
+        self.viewControlLayout.addWidget(self.imageDimensionsLabel,1,0,1,3)
+        self.viewControlLayout.addWidget(self.imagePixelSizeLabel,2,0,1,3)
+        self.viewControlLayout.addWidget(self.viewChannelsCheckbox,3,0,1,1)
+        self.viewControlLayout.addWidget(self.view3dCheckbox,3,1,1,1)
+        self.viewControlLayout.addWidget(self.sliceProjGroupBox,4,0,2,2)
+        self.viewControlLayout.addWidget(self.xyzGroupBox,3,2,3,1)
         
         # range control 
         self.zoomPanButton = QtGui.QPushButton('Zoom/Pan',checkable=True)
@@ -431,8 +471,8 @@ class ImageGui():
         self.levelsControlLayout.addWidget(self.showBinaryCheckbox,4,2,1,2)
         
         # mark points tab        
-        self.clearPointsButton = QtGui.QPushButton('Clear')
-        self.clearPointsButton.clicked.connect(self.clearPointsButtonCallback)
+        self.loadPointsButton = QtGui.QPushButton('Load')
+        self.loadPointsButton.clicked.connect(self.loadPointsButtonCallback)
         
         self.savePointsButton = QtGui.QPushButton('Save')
         self.savePointsButton.clicked.connect(self.savePointsButtonCallback)
@@ -458,7 +498,7 @@ class ImageGui():
             self.markPointsTable.setItem(0,col,item)
         
         self.markPointsLayout = QtGui.QGridLayout()
-        self.markPointsLayout.addWidget(self.clearPointsButton,0,0,1,2)
+        self.markPointsLayout.addWidget(self.loadPointsButton,0,0,1,2)
         self.markPointsLayout.addWidget(self.savePointsButton,1,0,1,2)
         self.markPointsLayout.addWidget(self.markPointsColorMenu,0,2,1,2)
         self.markPointsLayout.addWidget(self.decreasePointSizeButton,1,2,1,1)
@@ -524,7 +564,7 @@ class ImageGui():
             self.setViewBoxRange(self.displayedWindows)
         
     def saveImage(self):
-        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.tif')
+        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'Image (*.tif  *png *.jpg)')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
@@ -534,16 +574,17 @@ class ImageGui():
     def saveVolume(self):
         source = self.mainWin.sender()
         if source==self.fileMenuSaveVolumeImages:
-            fileType = 'tif'
+            fileType = 'Image (*.tif  *png *.jpg)'
         elif source==self.fileMenuSaveVolumeMovie:
-            fileType = 'avi'
+            fileType = '*.avi'
         elif source==self.fileMenuSaveVolumeNpz:
-            fileType = 'npz'
+            fileType = '*.npz'
         else:
-            fileType = 'mat'
-        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.'+fileType)
+            fileType = '*.mat'
+        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,fileType)
         if filePath=='':
             return
+        fileType = filePath[-4:]
         self.fileSavePath = os.path.dirname(filePath)
         axis = self.imageShapeIndex[self.selectedWindow][-1]
         imageIndex = self.imageIndex[self.selectedWindow][axis]
@@ -559,8 +600,8 @@ class ImageGui():
         for i,imgInd in enumerate(range(zRange[0],zRange[1]+1)):
             self.imageIndex[self.selectedWindow][axis] = imgInd
             img = self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1]
-            if fileType=='tif':
-                cv2.imwrite(filePath[:-4]+'_'+str(i)+'.tif',img[:,:,::-1])
+            if fileType in ('tif','png','jpg'):
+                cv2.imwrite(filePath[:-4]+'_'+str(i)+'.'+fileType,img[:,:,::-1])
             elif fileType=='avi':
                 vidOut.write(img)
             else:
@@ -576,13 +617,13 @@ class ImageGui():
                 scipy.io.savemat(filePath,data,do_compression=True)
                    
     def openFile(self):
-        filePaths,fileType = QtGui.QFileDialog.getOpenFileNamesAndFilter(self.mainWin,'Choose File(s)',self.fileOpenPath,'Images (*.tif *.jpg *.png);;Image Series (*.tif *.jpg *.png);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml);;Numpy Array (*npy *npz);;Allen Atlas (*.nrrd)',self.fileOpenType)
+        filePaths,fileType = QtGui.QFileDialog.getOpenFileNamesAndFilter(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image (*.tif *.png *.jpg *.jp2);;Image Series (*.tif *.png *.jpg *.jp2);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml);;Numpy Array (*npy *npz);;Allen Atlas (*.nrrd)',self.fileOpenType)
         if len(filePaths)<1:
             return
         self.fileOpenPath = os.path.dirname(filePaths[0])
         self.fileOpenType = fileType
         numCh = chFileOrg = None
-        if fileType=='Image Series (*.tif *.jpg *.png)':
+        if fileType=='Image Series (*.tif *.png *.jpg *.jp2)':
             filePaths = [filePaths]
             numCh,ok = QtGui.QInputDialog.getInt(self.mainWin,'Import Image Series','Number of channels:',1,min=1)
             if not ok:
@@ -659,7 +700,7 @@ class ImageGui():
         self.stitchState[window] = False
         self.selectedAtlasRegions[window] = []
         self.displayedWindows.remove(window)
-        self.imageItem[window].setImage(np.zeros((2,2,3),dtype=np.uint8).transpose((1,0,2)),autoLevels=False)
+        self.imageItem[window].setImage(np.zeros((2,2,3),dtype=np.uint8),levels=[0,255])
         self.imageViewBox[window].setMouseEnabled(x=False,y=False)
         self.imageViewBox[window].setZValue(0)
         self.clearMarkedPoints([window])
@@ -775,6 +816,8 @@ class ImageGui():
                 self.holdStitchRange = False
             self.updateStitchShape(affectedWindows)
         else:
+            for window in affectedWindows:
+                self.imageShape[window] = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].shape[:3]
             self.setImageRange()
             self.displayImageRange()
             self.setViewBoxRangeLimits(affectedWindows)
@@ -788,14 +831,56 @@ class ImageGui():
             raise Warning('Image must be aligned to reference before transforming')
         axis = self.imageShapeIndex[self.selectedWindow][2]
         sliceProjState = []
-        showBinaryState = []
         imageIndex = []
         for window in (refWin,self.selectedWindow):
             sliceProjState.append(self.sliceProjState[window])
-            showBinaryState.append(self.showBinaryState[window])
             imageIndex.append(self.imageIndex[window][axis])
             self.sliceProjState[window] = 0
-            self.showBinaryState[window] = True
+        rng = self.imageRange[self.selectedWindow][axis]
+        warpShape = tuple(self.imageShape[refWin][i] for i in self.imageShapeIndex[refWin][:2])+(rng[1]-rng[0]+1,)
+        for fileInd in self.checkedFileIndex[self.selectedWindow]:
+            dataIter = self.imageObjs[fileInd].getDataIterator(rangeSlice=slice(rng[0],rng[1]+1))
+            warpData = np.zeros(warpShape+(self.imageObjs[fileInd].shape[3],),dtype=np.uint8)
+            for ind,i in enumerate(range(rng[0],rng[1]+1)):
+                mask = []
+                for window in (refWin,self.selectedWindow):
+                    if window==refWin:
+                        alignInd = np.where(self.alignIndex[self.selectedWindow]==i)[0]
+                        self.imageIndex[window][axis] = alignInd[0]+alignInd.size//2
+                    else:
+                        self.imageIndex[window][axis] = i
+                    image = self.getImage(window,binary=True).max(axis=2)
+                    _,contours,_ = cv2.findContours(image,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+                    contourIndex = np.argmax([c.shape[0] for c in contours])
+                    mask.append(np.zeros(image.shape,dtype=np.uint8))
+                    cv2.drawContours(mask[-1],contours,contourIndex,1,-1)                    
+                template,img = mask
+                _,warpMatrix = cv2.findTransformECC(template,img,np.eye(2,3,dtype=np.float32),cv2.MOTION_AFFINE)
+                for ch in range(warpData.shape[3]):
+                    warpData[:,:,ind,ch] = cv2.warpAffine(next(dataIter),warpMatrix,warpShape[1::-1],flags=cv2.INTER_LINEAR+cv2.WARP_INVERSE_MAP)
+            self.imageObjs[fileInd].data = warpData
+            self.imageObjs[fileInd].shape = warpData.shape
+        for ind,window in enumerate((refWin,self.selectedWindow)):
+            self.sliceProjState[window] = sliceProjState[ind]
+            self.imageIndex[window][axis] = imageIndex[ind]
+        self.imageIndex[self.selectedWindow][axis] -= rng[0]
+        self.alignIndex[self.selectedWindow][self.alignIndex[self.selectedWindow]>=0] -= rng[0]
+        self.imageShape[self.selectedWindow] = warpShape
+        self.setImageRange()
+        self.setViewBoxRangeLimits()
+        self.displayImageInfo()
+        self.displayImage()
+        
+    def warpImage(self):
+        refWin = self.alignRefWindow[self.selectedWindow]
+        if refWin is None:
+            raise Warning('Image must be aligned to reference before warping')
+        refPoints = self.markedPoints[refWin]
+        warpPoints = self.markedPoints[self.selectedWindow]
+        if refPoints is None or warpPoints is None or refPoints!=warpPoints:
+            raise Warning('Equal number of points required in reference and aligned windows')
+        axis = self.imageShapeIndex[self.selectedWindow][2]
+        imageIndex = [self.imageIndex[window][axis] for window in (refWin,self.selectedWindow)]
         rng = self.imageRange[self.selectedWindow][axis]
         warpShape = tuple(self.imageShape[refWin][i] for i in self.imageShapeIndex[refWin][:2])+(rng[1]-rng[0]+1,)
         for fileInd in self.checkedFileIndex[self.selectedWindow]:
@@ -816,16 +901,8 @@ class ImageGui():
                     warpData[:,:,ind,ch] = cv2.warpAffine(next(dataIter),warpMatrix,warpShape[1::-1],flags=cv2.INTER_LINEAR+cv2.WARP_INVERSE_MAP)
             self.imageObjs[fileInd].data = warpData
             self.imageObjs[fileInd].shape = warpData.shape
-        for ind,window in enumerate((refWin,self.selectedWindow)):
-            self.sliceProjState[window] = sliceProjState[ind]
-            self.showBinaryState[window] = showBinaryState[ind]
+        for window,ind in zip((refWin,self.selectedWindow),imageIndex):
             self.imageIndex[window][axis] = imageIndex[ind]
-        self.imageIndex[self.selectedWindow][axis] -= rng[0]
-        self.alignIndex[self.selectedWindow][self.alignIndex[self.selectedWindow]>=0] -= rng[0]
-        self.imageShape[self.selectedWindow] = warpShape
-        self.setImageRange()
-        self.setViewBoxRangeLimits()
-        self.displayImageInfo()
         self.displayImage()
         
     def makeCCFVolume(self):
@@ -910,7 +987,7 @@ class ImageGui():
             windows = [self.selectedWindow]
         self.ignoreImageRangeChange = True
         for window in windows:
-            ymax,xmax = [self.imageShape[window][i]-1 for i in self.imageShapeIndex[window][:2]]
+            ymax,xmax = [math.ceil(self.imageShape[window][i]/self.displayDownsample[window])-1 for i in self.imageShapeIndex[window][:2]]
             self.imageViewBox[window].setLimits(xMin=0,xMax=xmax,yMin=0,yMax=ymax,minXRange=3,maxXRange=xmax,minYRange=3,maxYRange=ymax)
         self.ignoreImageRangeChange = False
         
@@ -946,7 +1023,7 @@ class ImageGui():
             x += offset
             y += offset
             size -= 2*offset
-            yRange,xRange,zRange = [self.imageRange[window][axis] for axis in self.imageShapeIndex[window]]
+            yRange,xRange,zRange = [[r//self.displayDownsample[window] for r in self.imageRange[window][axis]] for axis in self.imageShapeIndex[window]]
             yExtent,xExtent,zExtent = [r[1]-r[0] for r in (yRange,xRange,zRange)]
             if self.view3dCheckbox.isChecked():
                 maxXYExtent = max(yExtent,xExtent)
@@ -969,29 +1046,44 @@ class ImageGui():
             self.imageViewBox[window].setRange(xRange=xRange,yRange=yRange,padding=0)
         self.ignoreImageRangeChange = False
         
+    def downsampleEditCallback(self):
+        val = int(self.downsampleEdit.text())
+        if val<1:
+            val = 1
+        if val==self.displayDownsample[self.selectedWindow]:
+            return
+        self.displayDownsample[self.selectedWindow] = val
+        if self.selectedWindow in self.displayedWindows:
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+            for window in windows:
+                self.displayDownsample[window] = val
+                self.setViewBoxRangeLimits(windows)
+                self.setViewBoxRange(windows)
+                self.displayImage(windows)
+        
     def displayImage(self,windows=None):
         if windows is None:
             windows = [self.selectedWindow]
         for window in windows:
-            image = self.getImage(window)
-            self.imageItem[window].setImage(image.transpose((1,0,2)),autoLevels=False)
+            image = self.getImage(window,downsample=self.displayDownsample[window])
+            self.imageItem[window].setImage(image.transpose((1,0,2)),levels=[0,255])
+            if self.showImageLevelsButton.isChecked() and window is self.selectedWindow:
+                self.updateLevelsPlot(np.histogram(image,np.arange(257))[0])
         self.plotMarkedPoints(windows)
-        if self.showImageLevelsButton.isChecked():
-            self.updateLevelsPlot(np.histogram(image,np.arange(257))[0])
         
-    def getImage(self,window=None):
+    def getImage(self,window=None,downsample=1,binary=False):
         if window is None:
             window = self.selectedWindow
-        imageShape = [self.imageShape[window][i] for i in self.imageShapeIndex[window][:2]]
+        imageShape = [math.ceil(self.imageShape[window][i]/downsample) for i in self.imageShapeIndex[window][:2]]
         image = np.zeros((imageShape[0],imageShape[1],3))
         for fileInd in self.checkedFileIndex[window]:
             imageObj = self.imageObjs[fileInd]
             if self.stitchState[window]:
-                i,j = (slice(self.stitchPos[window,fileInd,i],self.stitchPos[window,fileInd,i]+imageObj.shape[i]) for i in self.imageShapeIndex[window][:2])
+                i,j = (slice(self.stitchPos[window,fileInd,i]//downsample,(self.stitchPos[window,fileInd,i]+math.ceil(imageObj.shape[i])/downsample)) for i in self.imageShapeIndex[window][:2])
             else:
-                i,j = (slice(0,imageObj.shape[i]) for i in self.imageShapeIndex[window][:2])
+                i,j = (slice(0,math.ceil(imageObj.shape[i]/downsample)) for i in self.imageShapeIndex[window][:2])
             channels = [ch for ch in self.selectedChannels[window] if ch<imageObj.shape[3]]
-            data,alphaMap = self.getImageData(imageObj,fileInd,window,channels)
+            data,alphaMap = self.getImageData(imageObj,fileInd,window,channels,downsample,binary)
             if data is not None:
                 if not self.stitchState[window]:
                     if alphaMap is not None:
@@ -1013,11 +1105,11 @@ class ImageGui():
                 image *= 255/image.max()
         image = image.astype(np.uint8)
         for regionInd in self.selectedAtlasRegions[window]:
-            _,contours,_ = cv2.findContours(self.getAtlasRegion(window,self.atlasRegionIDs[regionInd]).copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+            _,contours,_ = cv2.findContours(self.getAtlasRegion(window,self.atlasRegionIDs[regionInd],downsample).copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(image,contours,-1,(255,255,255))
         return image
                     
-    def getImageData(self,imageObj,fileInd,window,channels):
+    def getImageData(self,imageObj,fileInd,window,channels,downsample,binary):
         isProj = self.sliceProjState[window]
         axis = self.imageShapeIndex[window][2]
         if isProj:
@@ -1055,10 +1147,11 @@ class ImageGui():
                 data = imageObj.data[:,rangeSlice,:,channels]
             else:
                 data = imageObj.data[rangeSlice,:,:,channels].transpose((0,2,1,3))
-            data = data.max(axis).astype(float)
+            data = data.max(axis)
+        data = data[::downsample,::downsample].astype(float)
         for chInd,ch in enumerate(channels):
             chData = data[:,:,chInd]
-            if self.showBinaryState[window]:
+            if binary or self.showBinaryState[window]:
                 aboveThresh = chData>=imageObj.levels[ch][1]
                 chData[aboveThresh] = 255
                 chData[np.logical_not(aboveThresh)] = 0
@@ -1087,7 +1180,7 @@ class ImageGui():
             data *= imageObj.alpha
         return data,alphaMap
         
-    def getAtlasRegion(self,window,region):
+    def getAtlasRegion(self,window,region,downsample=1):
         isProj = self.sliceProjState[window]
         axis = self.imageShapeIndex[window][2]
         if isProj:
@@ -1104,7 +1197,7 @@ class ImageGui():
         a = np.in1d(a,region).reshape(a.shape)
         if isProj:
             a = a.max(axis=axis)
-        return a
+        return a[::downsample,::downsample]
         
     def setAtlasRegions(self):
         if self.atlasAnnotationData is None:
@@ -1138,6 +1231,7 @@ class ImageGui():
         
     def mainWinKeyPressCallback(self,event):
         key = event.key()
+        modifiers = self.app.keyboardModifiers()
         if key in (44,46) and self.sliceButton.isChecked() and not self.view3dCheckbox.isChecked():
             axis = self.imageShapeIndex[self.selectedWindow][2]
             imgInd = self.imageIndex[self.selectedWindow][axis]
@@ -1148,26 +1242,26 @@ class ImageGui():
         elif self.stitchCheckbox.isChecked() and key in (16777237,16777235,16777234,16777236,45,61):
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
             fileInd = list(set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex))
-            moveAxis,moveDist = self.getMoveParams(self.selectedWindow,key)
+            moveAxis,moveDist = self.getMoveParams(self.selectedWindow,key,modifiers)
             self.stitchPos[windows,fileInd,moveAxis] += moveDist
             self.updateStitchShape(windows)
             self.displayImage(windows)
-        elif self.selectedPoint is not None and key in (QtCore.Qt.Key_Delete,16777237,16777235,16777234,16777236):
+        elif self.selectedPoint is not None and key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace,16777237,16777235,16777234,16777236):
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedPointWindow]
             for window in windows:
                 imgAxis = self.imageShapeIndex[window][2]
                 if self.markedPoints[window][self.selectedPoint,imgAxis]==self.imageIndex[window][imgAxis]:
-                    if key==QtCore.Qt.Key_Delete:
-                        if self.markedPoints[window].shape[0]>1:
+                    if key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace):
+                        if int(modifiers & QtCore.Qt.ControlModifier)>0 or self.markedPoints[window].shape[0]<2:
+                            self.clearMarkedPoints([window])
+                        else:
                             self.markedPoints[window] = np.delete(self.markedPoints[window],self.selectedPoint,0)
                             if window==self.selectedWindow:
                                 self.markPointsTable.removeRow(self.selectedPoint)
                             self.selectedPoint = None
                             self.plotMarkedPoints([window])
-                        else:
-                            self.clearMarkedPoints([window])
                     else:
-                        moveAxis,moveDist = self.getMoveParams(window,key,True)
+                        moveAxis,moveDist = self.getMoveParams(window,key,modifiers,True)
                         point = self.markedPoints[window][self.selectedPoint]
                         point[moveAxis] += moveDist
                         rng = self.imageRange[window][moveAxis]
@@ -1180,7 +1274,7 @@ class ImageGui():
                             self.markPointsTable.item(self.selectedPoint,ind).setText(str(point[moveAxis]+1))
                         self.plotMarkedPoints([window])
                     
-    def getMoveParams(self,window,key,flipVert=False):
+    def getMoveParams(self,window,key,modifiers,flipVert=False):
         down,up = 16777237,16777235
         if flipVert:
             up,down = down,up
@@ -1190,7 +1284,6 @@ class ImageGui():
             axis = self.imageShapeIndex[window][1]
         else: # minus,plus
             axis = self.imageShapeIndex[window][2]
-        modifiers = self.app.keyboardModifiers()
         if int(modifiers & QtCore.Qt.ShiftModifier)>0:
             dist = 100
         elif int(modifiers & QtCore.Qt.ControlModifier)>0:
@@ -1452,6 +1545,7 @@ class ImageGui():
                 self.fileListbox.item(i).setCheckState(QtCore.Qt.Checked)
             else:
                 self.fileListbox.item(i).setCheckState(QtCore.Qt.Unchecked)
+        self.downsampleEdit.setText(self.displayDownsample[window])
         self.sliceProjButtons[self.sliceProjState[window]].setChecked(True)
         self.xyzButtons[self.xyzState[window]].setChecked(True)
         self.normDisplayCheckbox.setChecked(self.normState[window])
@@ -1491,12 +1585,10 @@ class ImageGui():
             self.viewChannelsSelectedCh = self.channelListbox.currentRow()
             self.displayImageLevels()
         else:
-            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
             channels = getSelectedItemsIndex(self.channelListbox)
-            for window in windows:
-                self.selectedChannels[window] = channels
+            self.selectedChannels[self.selectedWindow] = channels
             self.displayImageLevels()
-            self.displayImage(windows)
+            self.displayImage()
         
     def updateChannelList(self):
         self.channelListbox.blockSignals(True)
@@ -1652,6 +1744,7 @@ class ImageGui():
         self.linkWindowsCheckbox.setChecked(True)
         for window in range(numWindows):
             self.checkedFileIndex[window] = self.checkedFileIndex[self.selectedWindow]
+            self.displayDownsample[window] = self.displayDownsample[self.selectedWindow]
             self.sliceProjState[window] = self.sliceProjState[self.selectedWindow]
             self.imageShape[window] = self.imageShape[self.selectedWindow]
             self.imageRange[window] = self.imageRange[self.selectedWindow]
@@ -1748,7 +1841,7 @@ class ImageGui():
         if len(self.displayedWindows)<1 or self.ignoreImageRangeChange:
             return
         window = self.imageViewBox.index(self.mainWin.sender())
-        newRange = [[int(i) for i in r] for r in reversed(self.imageViewBox[window].viewRange())]
+        newRange = [[int(i*self.displayDownsample[window]) for i in r] for r in reversed(self.imageViewBox[window].viewRange())]
         axes = self.imageShapeIndex[window][:2]
         if self.view3dCheckbox.isChecked():
             # adjust out of plain range proportionally
@@ -1976,9 +2069,6 @@ class ImageGui():
         self.markPointsTable.setRowCount(1)
         for col in range(3):
             self.markPointsTable.item(0,col).setText('')
-    
-    def clearPointsButtonCallback(self):
-        self.clearMarkedPoints()
         
     def clearMarkedPoints(self,windows=None):
         if windows is None:
@@ -2002,7 +2092,18 @@ class ImageGui():
     
     def markPointsColorMenuCallback(self):
         self.markPointsColor = self.plotColors[self.markPointsColorMenu.currentIndex()]
-        self.plotMarkedPoints(self.displayedWindows) 
+        self.plotMarkedPoints(self.displayedWindows)
+        
+    def loadPointsButtonCallback(self):
+        filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose saved points file',self.fileOpenPath,'*.npy')
+        if filePath=='':
+            return
+        self.fileOpenPath = os.path.dirname(filePath)
+        if self.markedPoints[self.selectedWindow] is not None:
+            self.clearMarkedPoints()
+        self.markedPoints[self.selectedWindow] = np.load(filePath)[:,(1,0,2)]-1
+        self.fillPointsTable()
+        self.plotMarkedPoints()
         
     def savePointsButtonCallback(self):
         filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
@@ -2079,6 +2180,63 @@ class ImageGui():
         
     def alignEndEditCallback(self):
         self.alignRange[self.selectedWindow][1] = int(self.alignEndEdit.text())-1
+        
+    def getContours(self):
+        image = self.getImage(self.selectedWindow,downsample=self.displayDownsample[self.selectedWindow],binary=True)
+        _,contours,_ = cv2.findContours(image.max(axis=2),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+        contours = [c for c in contours if c.shape[0]>=self.minContourVertices]
+        if len(contours)>1 and (self.analysisMenuContoursMergeHorz.isChecked() or self.analysisMenuContoursMergeVert.isChecked()):
+            mergeAxis = 1 if self.analysisMenuContoursMergeHorz.isChecked() else 0
+            contours.sort(key=lambda x: x[:,0,mergeAxis].min())
+            mergedContours = [contours[0]]
+            for c in contours[1:]:
+                merged = False
+                for i,m in enumerate(mergedContours):
+                    if np.any(np.in1d(c[:,0,1],m[:,0,1])):
+                        mergedContours[i] = np.concatenate((m,c),axis=0)
+                        merged = True
+                        break
+                if not merged:
+                    mergedContours.append(c)
+        else:
+            mergedContours = contours
+        self.contourHulls = []
+        self.contourRectangles = []
+        for m in mergedContours:
+            self.contourHulls.append(cv2.convexHull(m))
+            x,y,w,h = cv2.boundingRect(m)
+            self.contourRectangles.append([x-1,y-1,w+2,h+2])
+        source = self.mainWin.sender()
+        if source is self.analysisMenuContoursFindRectangle:
+            for r in self.contourRectangles:
+                cv2.rectangle(image,(r[0],r[1]),(r[0]+r[2],r[1]+r[3]),(255,255,0),1)
+        else:
+            c = mergedContours if source is self.analysisMenuContoursFindContours else self.contourHulls
+            cv2.drawContours(image,c,-1,(255,255,0),1)
+        self.imageItem[self.selectedWindow].setImage(image.transpose(1,0,2),levels=[0,255])
+        
+    def setMinContourVertices(self):
+        n,ok = QtGui.QInputDialog.getInt(self.mainWin,'Select','Minimum number of contour vertices',self.minContourVertices,min=1)
+        if ok:
+            self.minContourVertices = n
+            
+    def setMergeContours(self):
+        source = self.mainWin.sender()
+        if source.isChecked():
+            if source is self.analysisMenuContoursMergeHorz:
+                self.analysisMenuContoursMergeVert.setChecked(False)
+            else:
+                self.analysisMenuContoursMergeHorz.setChecked(False)
+    
+    def saveContours(self):
+        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'Image (*.tif *.png *.jpg)')
+        if filePath=='':
+            return
+        self.fileSavePath = os.path.dirname(filePath)
+        image = self.getImage()
+        for ind,r in enumerate(self.contourRectangles):
+            r = [i*self.displayDownsample[self.selectedWindow] for i in r]
+            cv2.imwrite(filePath[:-4]+'_'+str(ind)+filePath[-4:],image[r[1]:r[1]+r[3],r[0]:r[0]+r[2],::-1])
 
 
 class ImageObj():
@@ -2096,7 +2254,7 @@ class ImageObj():
             self.data = self.formatData(filePath)
             self.shape = self.data.shape
             self.setAlphaMap(d)
-        elif fileType=='Images (*.tif *.jpg *.png)':
+        elif fileType=='Image (*.tif *.png *.jpg *.jp2)':
             self.fileType = 'image'
             d = cv2.imread(filePath,cv2.IMREAD_ANYCOLOR)
             numCh = 3 if len(d.shape)>2 else 1
@@ -2104,7 +2262,7 @@ class ImageObj():
             self.shape = d.shape[:2]+(1,numCh)
             if loadData: 
                 self.data = d[:,:,None,::-1] if numCh==3 else d[:,:,None,None]
-        elif fileType=='Image Series (*.tif *.jpg *.png)':
+        elif fileType=='Image Series (*.tif *.png *.jpg *.jp2)':
             self.fileType = 'image'
             self.filePath = [[] for _ in range(numCh)]
             for ind,file in enumerate(filePath):
@@ -2161,7 +2319,7 @@ class ImageObj():
             numImg = d.shape[2] if len(d.shape)>2 else 1
             numCh = d.shape[3] if len(d.shape)>3 else 1
             self.shape = d.shape[:2]+(numImg,numCh)
-            self.setAlphaMap(data=d)
+            self.setAlphaMap(d)
             if loadData:
                 self.data = self.formatData(d)
         elif fileType=='Allen Atlas (*.nrrd)':
@@ -2277,6 +2435,7 @@ class ImageObj():
             pass
         else:
             self.data = np.rot90(self.data)
+        self.shape = tuple(self.shape[i] for i in (1,0,2,3))
                 
 
 def setLayoutGridSpacing(layout,height,width,rows,cols):
@@ -2293,16 +2452,6 @@ def getSelectedItemsIndex(listbox):
         if listbox.item(i).isSelected():
             selectedItemsIndex.append(i)
     return selectedItemsIndex
-        
-def drawContour(image,threshold=255,lineWidth=-1):
-    threshInd = image>=threshold
-    image[threshInd] = 1
-    image[np.logical_not(threshInd)] = 0
-    _,contours,_ = cv2.findContours(image,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-    maxContour = np.argmax([cont.shape[0] for cont in contours])
-    cv2.drawContours(image,contours,maxContour,255,lineWidth)
-    image[image<255] = 0
-    return image
 
 
 if __name__=="__main__":
