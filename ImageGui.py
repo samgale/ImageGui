@@ -854,8 +854,7 @@ class ImageGui():
                     contourIndex = np.argmax([c.shape[0] for c in contours])
                     mask.append(np.zeros(image.shape,dtype=np.uint8))
                     cv2.drawContours(mask[-1],contours,contourIndex,1,-1)                    
-                template,img = mask
-                _,warpMatrix = cv2.findTransformECC(template,img,np.eye(2,3,dtype=np.float32),cv2.MOTION_AFFINE)
+                _,warpMatrix = cv2.findTransformECC(mask[0],mask[1],np.eye(2,3,dtype=np.float32),cv2.MOTION_AFFINE)
                 for ch in range(warpData.shape[3]):
                     warpData[:,:,ind,ch] = cv2.warpAffine(next(dataIter),warpMatrix,warpShape[1::-1],flags=cv2.INTER_LINEAR+cv2.WARP_INVERSE_MAP)
             self.imageObjs[fileInd].data = warpData
@@ -877,34 +876,49 @@ class ImageGui():
             raise Warning('Image must be aligned to reference before warping')
         refPoints = self.markedPoints[refWin]
         warpPoints = self.markedPoints[self.selectedWindow]
-        if refPoints is None or warpPoints is None or refPoints!=warpPoints:
+        if refPoints is None or warpPoints is None or refPoints.shape[0]!=warpPoints.shape[0]:
             raise Warning('Equal number of points required in reference and aligned windows')
-        axis = self.imageShapeIndex[self.selectedWindow][2]
-        imageIndex = [self.imageIndex[window][axis] for window in (refWin,self.selectedWindow)]
+        shapeIndex = self.imageShapeIndex[refWin]
+        axis = shapeIndex[2]
         rng = self.imageRange[self.selectedWindow][axis]
-        warpShape = tuple(self.imageShape[refWin][i] for i in self.imageShapeIndex[refWin][:2])+(rng[1]-rng[0]+1,)
+        h,w = (self.imageShape[refWin][i] for i in shapeIndex[:2])
+        boundaryPts = [(0,0),(w/2,0),(w-1,0),(w-1,h/2),(w-1,h-1),(w/2,h-1),(0,h-1),(0,h/2)]
         for fileInd in self.checkedFileIndex[self.selectedWindow]:
-            dataIter = self.imageObjs[fileInd].getDataIterator(rangeSlice=slice(rng[0],rng[1]+1))
-            warpData = np.zeros(warpShape+(self.imageObjs[fileInd].shape[3],),dtype=np.uint8)
-            for ind,i in enumerate(range(rng[0],rng[1]+1)):
-                contours = []
-                for window in (refWin,self.selectedWindow):
-                    if window==refWin:
-                        alignInd = np.where(self.alignIndex[self.selectedWindow]==i)[0]
-                        self.imageIndex[window][axis] = alignInd[0]+alignInd.size//2
-                    else:
-                        self.imageIndex[window][axis] = i
-                    contours.append(drawContour(self.getImage(window).max(axis=2)))
-                template,img = contours
-                _,warpMatrix = cv2.findTransformECC(template,img,np.eye(2,3,dtype=np.float32),cv2.MOTION_AFFINE)
-                for ch in range(warpData.shape[3]):
-                    warpData[:,:,ind,ch] = cv2.warpAffine(next(dataIter),warpMatrix,warpShape[1::-1],flags=cv2.INTER_LINEAR+cv2.WARP_INVERSE_MAP)
-            self.imageObjs[fileInd].data = warpData
-            self.imageObjs[fileInd].shape = warpData.shape
-        for window,ind in zip((refWin,self.selectedWindow),imageIndex):
-            self.imageIndex[window][axis] = imageIndex[ind]
+            imageData = self.imageObjs[fileInd].data[:,:,rng[0]:rng[1]+1]
+            img = imageData.copy()
+            for ind,imgInd in enumerate(range(rng[0],rng[1]+1)):
+                # append boundaryPts to (x,y) float32 point arrays
+                refPts,warpPts = (np.concatenate((pts[pts[:,axis]==imgInd,:][:,shapeIndex[1::-1]],boundaryPts),axis=0).astype(np.float32) for pts in (refPoints,warpPoints))
+                # get Delaunay triangles as indices of points (point1Index,point2Index,point3Index)
+                subdiv = cv2.Subdiv2D((0,0,w,h))
+                for pt in refPts:
+                    subdiv.insert((pt[0],pt[1]))
+                triangles = subdiv.getTriangleList()
+                triangles = triangles[np.all(triangles>=0,axis=1) & np.all(triangles[:,::2]<w,axis=1) & np.all(triangles[:,1::2]<h,axis=1)]
+                triPtInd = np.zeros((triangles.shape[0],3),dtype=int)
+                for ptInd,pt in enumerate(refPts):
+                    for i,tri in enumerate(triangles):
+                        for j in (0,2,4):
+                            if np.all(tri[j:j+2]==pt):
+                                triPtInd[i,j//2] = ptInd
+                # warp each triangle
+                for tri in triPtInd:
+                    refTri = refPts[tri]
+                    warpTri = warpPts[tri]
+                    refRect = cv2.boundingRect(refTri)
+                    warpRect = cv2.boundingRect(warpTri)
+                    refTri -= refRect[:2]
+                    warpTri -= warpRect[:2]
+                    refSlice,warpSlice = ((slice(r[1],r[1]+r[3]),slice(r[0],r[0]+r[2])) for r in (refRect,warpRect))
+                    mask = np.zeros(refRect[:-3:-1],dtype=np.uint8)
+                    cv2.fillConvexPoly(mask,refTri.astype(int),1)
+                    mask = mask.astype(bool)
+                    warpMatrix = cv2.getAffineTransform(warpTri,refTri)
+                    for ch in range(imageData.shape[3]):
+                        warpData = cv2.warpAffine(img[warpSlice[0],warpSlice[1],ind,ch],warpMatrix,refRect[2:],flags=cv2.INTER_LINEAR,borderMode=cv2.BORDER_REFLECT_101)
+                        imageData[refSlice[0],refSlice[1],ind,ch][mask] = warpData[mask]
         self.displayImage()
-        
+    
     def makeCCFVolume(self):
         self.checkIfSelectedDisplayedBeforeShapeChange()
         refWin = self.alignRefWindow[self.selectedWindow]
@@ -1545,7 +1559,7 @@ class ImageGui():
                 self.fileListbox.item(i).setCheckState(QtCore.Qt.Checked)
             else:
                 self.fileListbox.item(i).setCheckState(QtCore.Qt.Unchecked)
-        self.downsampleEdit.setText(self.displayDownsample[window])
+        self.downsampleEdit.setText(str(self.displayDownsample[window]))
         self.sliceProjButtons[self.sliceProjState[window]].setChecked(True)
         self.xyzButtons[self.xyzState[window]].setChecked(True)
         self.normDisplayCheckbox.setChecked(self.normState[window])
@@ -1825,10 +1839,10 @@ class ImageGui():
         if rangeInd==0:
             newVal = int(self.rangeEditBoxes[axis][0].text())-1
             axMin = 0
-            axMax = int(self.rangeEditBoxes[axis][1].text())-2
+            axMax = int(self.rangeEditBoxes[axis][1].text())-1
         else:
             newVal = int(self.rangeEditBoxes[axis][1].text())-1
-            axMin = int(self.rangeEditBoxes[axis][0].text())
+            axMin = int(self.rangeEditBoxes[axis][0].text())-1
             axMax = self.imageShape[self.selectedWindow][axis]-1
         if newVal<axMin:
             newVal = axMin
@@ -2451,7 +2465,7 @@ def getSelectedItemsIndex(listbox):
     for i in range(listbox.count()):
         if listbox.item(i).isSelected():
             selectedItemsIndex.append(i)
-    return selectedItemsIndex
+    return selectedItemsIndex    
 
 
 if __name__=="__main__":
