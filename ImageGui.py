@@ -15,7 +15,7 @@ http://api.brain-map.org/api/v2/structure_graph_download/1.json
 from __future__ import division
 import sip
 sip.setapi('QString', 2)
-import os, time, math, cv2, nrrd
+import os, time, math, cv2, nrrd, PIL, zipfile
 from xml.dom import minidom
 import numpy as np
 import scipy.io
@@ -528,6 +528,9 @@ class ImageGui():
         self.alignCheckbox = QtGui.QCheckBox('Align')
         self.alignCheckbox.clicked.connect(self.alignCheckboxCallback)
         
+        self.copyPointsButton = QtGui.QPushButton('Copy Points')
+        self.copyPointsButton.clicked.connect(self.copyPointsButtonCallback)
+        
         self.alignLayout = QtGui.QGridLayout()
         self.alignLayout.addWidget(self.alignRefLabel,0,0,1,1)
         self.alignLayout.addWidget(self.alignRefMenu,0,1,1,1)
@@ -535,7 +538,8 @@ class ImageGui():
         self.alignLayout.addWidget(self.alignStartEdit,1,1,1,1)
         self.alignLayout.addWidget(self.alignEndLabel,2,0,1,1)
         self.alignLayout.addWidget(self.alignEndEdit,2,1,1,1)
-        self.alignLayout.addWidget(self.alignCheckbox,3,0,1,2)
+        self.alignLayout.addWidget(self.alignCheckbox,3,0,1,1)
+        self.alignLayout.addWidget(self.copyPointsButton,3,1,1,1)
         self.alignTab = QtGui.QWidget()
         self.alignTab.setLayout(self.alignLayout)
         self.tabs.addTab(self.alignTab,'Align')
@@ -574,7 +578,7 @@ class ImageGui():
     def saveVolume(self):
         source = self.mainWin.sender()
         if source==self.fileMenuSaveVolumeImages:
-            fileType = 'Image (*.tif  *png *.jpg)'
+            fileType = 'Image (*.tif  *.png *.jpg)'
         elif source==self.fileMenuSaveVolumeMovie:
             fileType = '*.avi'
         elif source==self.fileMenuSaveVolumeNpz:
@@ -584,7 +588,7 @@ class ImageGui():
         filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,fileType)
         if filePath=='':
             return
-        fileType = filePath[-4:]
+        fileType = filePath[-3:]
         self.fileSavePath = os.path.dirname(filePath)
         axis = self.imageShapeIndex[self.selectedWindow][-1]
         imageIndex = self.imageIndex[self.selectedWindow][axis]
@@ -617,7 +621,7 @@ class ImageGui():
                 scipy.io.savemat(filePath,data,do_compression=True)
                    
     def openFile(self):
-        filePaths,fileType = QtGui.QFileDialog.getOpenFileNamesAndFilter(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image (*.tif *.png *.jpg *.jp2);;Image Series (*.tif *.png *.jpg *.jp2);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml);;Numpy Array (*npy *npz);;Allen Atlas (*.nrrd)',self.fileOpenType)
+        filePaths,fileType = QtGui.QFileDialog.getOpenFileNamesAndFilter(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image (*.tif *.png *.jpg *.jp2);;Image Series (*.tif *.png *.jpg *.jp2);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml);;Numpy Array (*.npy *.npz);;Allen Atlas (*.nrrd)',self.fileOpenType)
         if len(filePaths)<1:
             return
         self.fileOpenPath = os.path.dirname(filePaths[0])
@@ -841,14 +845,13 @@ class ImageGui():
         for fileInd in self.checkedFileIndex[self.selectedWindow]:
             dataIter = self.imageObjs[fileInd].getDataIterator(rangeSlice=slice(rng[0],rng[1]+1))
             warpData = np.zeros(warpShape+(self.imageObjs[fileInd].shape[3],),dtype=np.uint8)
-            for ind,i in enumerate(range(rng[0],rng[1]+1)):
+            for ind,imgInd in enumerate(range(rng[0],rng[1]+1)):
                 mask = []
                 for window in (refWin,self.selectedWindow):
                     if window==refWin:
-                        alignInd = np.where(self.alignIndex[self.selectedWindow]==i)[0]
-                        self.imageIndex[window][axis] = alignInd[0]+alignInd.size//2
+                        self.imageIndex[window][axis] = self.getAlignedRefImageIndex(self.selectedWindow,imgInd)
                     else:
-                        self.imageIndex[window][axis] = i
+                        self.imageIndex[window][axis] = imgInd
                     image = self.getImage(window,binary=True).max(axis=2)
                     _,contours,_ = cv2.findContours(image,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
                     contourIndex = np.argmax([c.shape[0] for c in contours])
@@ -884,39 +887,38 @@ class ImageGui():
         h,w = (self.imageShape[refWin][i] for i in shapeIndex[:2])
         boundaryPts = [(0,0),(w/2,0),(w-1,0),(w-1,h/2),(w-1,h-1),(w/2,h-1),(0,h-1),(0,h/2)]
         for fileInd in self.checkedFileIndex[self.selectedWindow]:
-            imageData = self.imageObjs[fileInd].data[:,:,rng[0]:rng[1]+1]
-            img = imageData.copy()
+            imageData = self.imageObjs[fileInd].data[:,:,rng[0]:rng[1]+1].copy()
             for ind,imgInd in enumerate(range(rng[0],rng[1]+1)):
                 # append boundaryPts to (x,y) float32 point arrays
-                refPts,warpPts = (np.concatenate((pts[pts[:,axis]==imgInd,:][:,shapeIndex[1::-1]],boundaryPts),axis=0).astype(np.float32) for pts in (refPoints,warpPoints))
-                # get Delaunay triangles as indices of points (point1Index,point2Index,point3Index)
-                subdiv = cv2.Subdiv2D((0,0,w,h))
-                for pt in refPts:
-                    subdiv.insert((pt[0],pt[1]))
-                triangles = subdiv.getTriangleList()
-                triangles = triangles[np.all(triangles>=0,axis=1) & np.all(triangles[:,::2]<w,axis=1) & np.all(triangles[:,1::2]<h,axis=1)]
-                triPtInd = np.zeros((triangles.shape[0],3),dtype=int)
-                for ptInd,pt in enumerate(refPts):
+                refInd = self.getAlignedRefImageIndex(self.selectedWindow,imgInd)
+                if refInd in refPoints[:,axis] and imgInd in warpPoints[:,axis]:
+                    refPts,warpPts = (np.concatenate((pts[pts[:,axis]==i][:,shapeIndex[1::-1]],boundaryPts),axis=0).astype(np.float32) for pts,i in zip((refPoints,warpPoints),(refInd,imgInd)))
+                    # get Delaunay triangles as indices of points (point1Index,point2Index,point3Index)
+                    subdiv = cv2.Subdiv2D((0,0,w,h))
+                    for pt in refPts:
+                        subdiv.insert((pt[0],pt[1]))
+                    triangles = subdiv.getTriangleList()
+                    triangles = triangles[np.all(triangles>=0,axis=1) & np.all(triangles[:,::2]<w,axis=1) & np.all(triangles[:,1::2]<h,axis=1)]
+                    triPtInd = np.zeros((triangles.shape[0],3),dtype=int)
                     for i,tri in enumerate(triangles):
                         for j in (0,2,4):
-                            if np.all(tri[j:j+2]==pt):
-                                triPtInd[i,j//2] = ptInd
-                # warp each triangle
-                for tri in triPtInd:
-                    refTri = refPts[tri]
-                    warpTri = warpPts[tri]
-                    refRect = cv2.boundingRect(refTri)
-                    warpRect = cv2.boundingRect(warpTri)
-                    refTri -= refRect[:2]
-                    warpTri -= warpRect[:2]
-                    refSlice,warpSlice = ((slice(r[1],r[1]+r[3]),slice(r[0],r[0]+r[2])) for r in (refRect,warpRect))
-                    mask = np.zeros(refRect[:-3:-1],dtype=np.uint8)
-                    cv2.fillConvexPoly(mask,refTri.astype(int),1)
-                    mask = mask.astype(bool)
-                    warpMatrix = cv2.getAffineTransform(warpTri,refTri)
-                    for ch in range(imageData.shape[3]):
-                        warpData = cv2.warpAffine(img[warpSlice[0],warpSlice[1],ind,ch],warpMatrix,refRect[2:],flags=cv2.INTER_LINEAR,borderMode=cv2.BORDER_REFLECT_101)
-                        imageData[refSlice[0],refSlice[1],ind,ch][mask] = warpData[mask]
+                            triPtInd[i,j//2] = np.where(np.all(refPts==tri[j:j+2],axis=1))[0][0]
+                    # warp each triangle
+                    for tri in triPtInd:
+                        refTri = refPts[tri]
+                        warpTri = warpPts[tri]
+                        refRect = cv2.boundingRect(refTri)
+                        warpRect = cv2.boundingRect(warpTri)
+                        refTri -= refRect[:2]
+                        warpTri -= warpRect[:2]
+                        refSlice,warpSlice = ((slice(r[1],r[1]+r[3]),slice(r[0],r[0]+r[2])) for r in (refRect,warpRect))
+                        mask = np.zeros(refRect[:-3:-1],dtype=np.uint8)
+                        cv2.fillConvexPoly(mask,refTri.astype(int),1)
+                        mask = mask.astype(bool)
+                        warpMatrix = cv2.getAffineTransform(warpTri,refTri)
+                        for ch in range(imageData.shape[3]):
+                            warpData = cv2.warpAffine(imageData[warpSlice[0],warpSlice[1],ind,ch],warpMatrix,refRect[2:],flags=cv2.INTER_LINEAR,borderMode=cv2.BORDER_REFLECT_101)
+                            self.imageObjs[fileInd].data[refSlice[0],refSlice[1],imgInd,ch][mask] = warpData[mask]
         self.displayImage()
     
     def makeCCFVolume(self):
@@ -1088,14 +1090,14 @@ class ImageGui():
     def getImage(self,window=None,downsample=1,binary=False):
         if window is None:
             window = self.selectedWindow
-        imageShape = [math.ceil(self.imageShape[window][i]/downsample) for i in self.imageShapeIndex[window][:2]]
+        imageShape = [int(math.ceil(self.imageShape[window][i]/downsample)) for i in self.imageShapeIndex[window][:2]]
         image = np.zeros((imageShape[0],imageShape[1],3))
         for fileInd in self.checkedFileIndex[window]:
             imageObj = self.imageObjs[fileInd]
             if self.stitchState[window]:
-                i,j = (slice(self.stitchPos[window,fileInd,i]//downsample,(self.stitchPos[window,fileInd,i]+math.ceil(imageObj.shape[i])/downsample)) for i in self.imageShapeIndex[window][:2])
+                i,j = (slice(self.stitchPos[window,fileInd,i]//downsample,self.stitchPos[window,fileInd,i]+int(math.ceil(imageObj.shape[i])/downsample)) for i in self.imageShapeIndex[window][:2])
             else:
-                i,j = (slice(0,math.ceil(imageObj.shape[i]/downsample)) for i in self.imageShapeIndex[window][:2])
+                i,j = (slice(0,int(math.ceil(imageObj.shape[i]/downsample))) for i in self.imageShapeIndex[window][:2])
             channels = [ch for ch in self.selectedChannels[window] if ch<imageObj.shape[3]]
             data,alphaMap = self.getImageData(imageObj,fileInd,window,channels,downsample,binary)
             if data is not None:
@@ -1199,9 +1201,13 @@ class ImageGui():
         axis = self.imageShapeIndex[window][2]
         if isProj:
             rng = self.imageRange[window][axis]
+            if self.alignRefWindow[window] is not None:
+                rng = [self.getAlignedRefImageIndex(window,i) for i in rng]
             ind = slice(rng[0],rng[1]+1)
         else:
             ind = self.imageIndex[window][axis]
+            if self.alignRefWindow[window] is not None:
+                ind = self.getAlignedRefImageIndex(window,ind)
         if axis==2:
             a = self.atlasAnnotationData[:,:,ind]
         elif axis==1:
@@ -1287,6 +1293,12 @@ class ImageGui():
                             ind = 2 if moveAxis==2 else int(not moveAxis)
                             self.markPointsTable.item(self.selectedPoint,ind).setText(str(point[moveAxis]+1))
                         self.plotMarkedPoints([window])
+        elif key==QtCore.Qt.Key_B and int(modifiers & QtCore.Qt.ControlModifier)>0 and self.markedPoints[self.selectedWindow] is not None:
+            pts = self.markedPoints[self.selectedWindow].copy()
+            pts[:,1] = np.absolute(self.imageShape[self.selectedWindow][1]-1-pts[:,1])
+            self.markedPoints[self.selectedWindow] = np.concatenate((self.markedPoints[self.selectedWindow],pts))
+            self.fillPointsTable(append=True)
+            self.plotMarkedPoints([self.selectedWindow])
                     
     def getMoveParams(self,window,key,modifiers,flipVert=False):
         down,up = 16777237,16777235
@@ -1355,7 +1367,7 @@ class ImageGui():
         for window in windows:
             self.markedPoints[window] = newPoint[None,:] if self.markedPoints[window] is None else np.concatenate((self.markedPoints[window],newPoint[None,:]))
             if window==self.selectedWindow:
-                self.fillPointsTable(newPoint=True)
+                self.fillPointsTable(append=True)
         self.selectedPoint = self.markedPoints[window].shape[0]-1
         self.selectedPointWindow = window
         self.plotMarkedPoints(windows)
@@ -2059,13 +2071,16 @@ class ImageGui():
                     x = y = []
             self.markPointsPlot[window].setData(x=x,y=y,symbolSize=self.markPointsSize,symbolPen=self.markPointsColor)
         
-    def fillPointsTable(self,newPoint=False):
+    def fillPointsTable(self,append=False):
         if self.markedPoints[self.selectedWindow] is not None:
             numPts = self.markedPoints[self.selectedWindow].shape[0]
-            if newPoint:
-                if numPts>1:
-                    self.markPointsTable.insertRow(numPts-1)
-                rows = [numPts-1]
+            if append:
+                numCols = self.markPointsTable.rowCount()
+                firstRow = 0 if numCols==1 else numCols
+                rows = range(firstRow,numPts)
+                for row in rows:
+                    if row>0:
+                        self.markPointsTable.insertRow(row)
             else:
                 self.markPointsTable.setRowCount(numPts)
                 rows = range(numPts)
@@ -2147,6 +2162,21 @@ class ImageGui():
                     contents += val+'\t'
                 contents = contents[:-1]+'\n'
             self.app.clipboard().setText(contents)
+            
+    def copyPointsButtonCallback(self):
+        refWin = self.alignRefWindow[self.selectedWindow]
+        if refWin is None:
+            return
+        self.clearMarkedPoints()
+        if self.markedPoints[refWin] is not None:
+            axis = self.alignAxis[self.selectedWindow]
+            for imgInd in range(self.imageShape[self.selectedWindow][axis]):
+                refInd = self.getAlignedRefImageIndex(self.selectedWindow,imgInd)
+                pts = self.markedPoints[refWin][self.markedPoints[refWin][:,axis]==refInd].copy()
+                pts[:,axis] = imgInd
+                self.markedPoints[self.selectedWindow] = pts if self.markedPoints[self.selectedWindow] is None else np.concatenate((self.markedPoints[self.selectedWindow],pts))
+            self.fillPointsTable()
+            self.plotMarkedPoints()
         
     def alignCheckboxCallback(self):
         if self.alignCheckbox.isChecked():
@@ -2171,6 +2201,8 @@ class ImageGui():
             alignInd = np.arange(n)/interval+rng[0]
             self.alignIndex[self.selectedWindow] = -np.ones(self.imageShape[refWin][axis],dtype=int)
             self.alignIndex[self.selectedWindow][start:end+1] = alignInd[::-1] if reverse else alignInd
+            self.imageIndex[refWin][axis] = self.getAlignedRefImageIndex(self.selectedWindow,self.imageIndex[self.selectedWindow][axis])
+            self.displayImage([refWin])
         else:
             self.alignRefWindow[self.selectedWindow] = None
             if self.imageIndex[self.selectedWindow][self.alignAxis[self.selectedWindow]]<0:
@@ -2185,9 +2217,12 @@ class ImageGui():
                 self.displayImage([alignedWindow])
         elif self.alignRefWindow[window] is not None:
             if self.alignAxis[self.selectedWindow]==axis:
-                imgInd = np.where(self.alignIndex[window]==self.imageIndex[window][axis])[0]
-                self.imageIndex[self.alignRefWindow[window]][axis] = imgInd[0]+imgInd.size//2
+                self.imageIndex[self.alignRefWindow[window]][axis] = self.getAlignedRefImageIndex(window,self.imageIndex[window][axis])
                 self.displayImage([self.alignRefWindow[window]])
+                
+    def getAlignedRefImageIndex(self,window,imageIndex):
+        refInd = np.where(self.alignIndex[window]==imageIndex)[0]
+        return refInd[0]+refInd.size//2
                 
     def alignStartEditCallback(self):
         self.alignRange[self.selectedWindow][0] = int(self.alignStartEdit.text())-1
@@ -2264,37 +2299,42 @@ class ImageObj():
         if isinstance(filePath,np.ndarray):
             self.fileType = 'data'
             self.filePath = None
-            d = filePath
+            shape = filePath.shape
+            numImg = shape[2] if len(shape)>2 else 1
+            numCh = shape[3] if len(shape)>3 else 1
+            if numCh==4:
+                numCh = 3
+            self.shape = shape[:2]+(numImg,numCh)
             self.data = self.formatData(filePath)
-            self.shape = self.data.shape
-            self.setAlphaMap(d)
         elif fileType=='Image (*.tif *.png *.jpg *.jp2)':
             self.fileType = 'image'
-            d = cv2.imread(filePath,cv2.IMREAD_ANYCOLOR)
-            numCh = 3 if len(d.shape)>2 else 1
+            img = PIL.Image.open(filePath)
+            numCh = 3 if img.mode=='RGB' else 1
             self.filePath = [[filePath]]*numCh
-            self.shape = d.shape[:2]+(1,numCh)
+            self.shape = img.size[::-1]+(1,numCh)
+            img.close()
             if loadData: 
-                self.data = d[:,:,None,::-1] if numCh==3 else d[:,:,None,None]
+                self.data = self.getData()
         elif fileType=='Image Series (*.tif *.png *.jpg *.jp2)':
             self.fileType = 'image'
             self.filePath = [[] for _ in range(numCh)]
-            for ind,file in enumerate(filePath):
+            for ind,f in enumerate(filePath):
                 if ind==0:
-                    d = cv2.imread(file,cv2.IMREAD_ANYCOLOR)
+                    img = PIL.Image.open(f)
                     if chFileOrg=='rgb':
-                        if len(d.shape)!=3:
+                        if img.mode!='RGB':
                             raise Warning('Import aborted: images must be rgb if channel file organization is rgb')
-                    elif len(d.shape)!=2:
+                    elif img.mode!='L':
                         raise Warning('Import aborted: images must be grayscale if channel file organization is not rgb')
                     numImg = len(filePath) if chFileOrg=='rgb' else int(len(filePath)/numCh)
-                    self.shape = d.shape[:2]+(numImg,numCh)
+                    self.shape = img.size[::-1]+(numImg,numCh)
+                    img.close()
                 if chFileOrg=='rgb':
                     for ch in range(numCh):
-                        self.filePath[ch].append(file)
+                        self.filePath[ch].append(f)
                 else:
                     ch = ind%numCh if chFileOrg=='alternating' else ind//int(len(filePath)/numCh)
-                    self.filePath[ch].append(file)
+                    self.filePath[ch].append(f)
             if loadData:
                 self.data = self.getData()
         elif fileType in ('Bruker Dir (*.xml)','Bruker Dir + Siblings (*.xml)'):
@@ -2312,8 +2352,8 @@ class ImageObj():
             for frame in frames:
                 zpos.append(float(frame.getElementsByTagName('SubindexedValue')[2].getAttribute('value')))
                 for ch,tifFile in enumerate(frame.getElementsByTagName('File')):
-                    file = os.path.join(os.path.dirname(filePath),tifFile.getAttribute('filename'))
-                    self.filePath[ch].append(file)
+                    f = os.path.join(os.path.dirname(filePath),tifFile.getAttribute('filename'))
+                    self.filePath[ch].append(f)
             if loadData:
                 self.data = self.getData()
             self.pixelSize = [round(float(pvStateValues[9].getElementsByTagName('IndexedValue')[0].getAttribute('value')),4)]*2
@@ -2324,18 +2364,24 @@ class ImageObj():
             xpos = float(pvStateValues[17].getElementsByTagName('SubindexedValue')[0].getAttribute('value'))
             ypos = float(pvStateValues[17].getElementsByTagName('SubindexedValue')[1].getAttribute('value'))
             self.position = [int(ypos/self.pixelSize[0]),int(xpos/self.pixelSize[1]),int(zpos[0]/self.pixelSize[2])] 
-        elif fileType=='Numpy Array (*npy *npz)':
+        elif fileType=='Numpy Array (*.npy *.npz)':
             self.fileType = 'numpy'
             self.filePath = filePath
-            d = np.load(filePath)
-            if isinstance(d,np.lib.npyio.NpzFile):
-                d = d[d.keys()[0]]
-            numImg = d.shape[2] if len(d.shape)>2 else 1
-            numCh = d.shape[3] if len(d.shape)>3 else 1
-            self.shape = d.shape[:2]+(numImg,numCh)
-            self.setAlphaMap(d)
+            if filePath[-4:]=='.npz':
+                z = zipfile.ZipFile(filePath)
+                npy = z.open(z.namelist()[0])
+            else:
+                npy = open(filePath)
+            version = np.lib.format.read_magic(npy)
+            shape,fortran,dtype = np.lib.format._read_array_header(npy,version)
+            npy.close()
+            numImg = shape[2] if len(shape)>2 else 1
+            numCh = shape[3] if len(shape)>3 else 1
+            if numCh==4:
+                numCh = 3
+            self.shape = shape[:2]+(numImg,numCh)
             if loadData:
-                self.data = self.formatData(d)
+                self.data = self.getData()
         elif fileType=='Allen Atlas (*.nrrd)':
             self.fileType = 'atlas'
             self.filePath = filePath
@@ -2413,17 +2459,10 @@ class ImageObj():
             data = data[:,:,None,None]
         elif len(data.shape)<4:
             data = data[:,:,:,None]
+        if data.shape[3]==4 and self.shape[3]==3:
+            self.alphaMap = data[:,:,:,3]
+            data = data[:,:,:,:3]
         return data
-        
-    def setAlphaMap(self,data):
-        if len(data.shape)<3:
-            data = data[:,:,None]
-        elif len(data.shape)>3:
-            data = data[:,:,:,0]
-        ind = np.isnan(data)
-        if ind.any():
-            self.alphaMap = np.zeros(self.shape[:3],dtype=np.uint8)
-            self.alphaMap[np.logical_not(ind)] = 255
             
     def flipX(self):
         if self.data is None:
