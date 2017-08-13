@@ -19,7 +19,7 @@ import math, os, PIL, time, zipfile
 import cv2, nrrd, tifffile
 from xml.dom import minidom
 import numpy as np
-import scipy.io
+import scipy.io, scipy.interpolate
 from PyQt4 import QtGui, QtCore
 import pyqtgraph as pg
 
@@ -80,7 +80,6 @@ class ImageGui():
         self.markPointsSize = 5
         self.markPointsColor = 'y'
         self.selectedPoint = None
-        self.selectedPointWindow = None
         self.alignRefWindow = [None]*self.numWindows
         self.alignRange = [[None,None] for _ in range(self.numWindows)]
         self.alignAxis = [None]*self.numWindows
@@ -136,7 +135,14 @@ class ImageGui():
         
         # image menu
         self.imageMenu = self.menuBar.addMenu('Image')
-        self.imageMenuRange = self.imageMenu.addMenu('Range')
+        self.imageMenuConvert = self.imageMenu.addMenu('Convert')
+        self.imageMenuConvertTo8Bit = QtGui.QAction('To 8-Bit',self.mainWin)
+        self.imageMenuConvertTo8Bit.triggered.connect(self.convertImage)
+        self.imageMenuConvertTo16Bit = QtGui.QAction('To 16-Bit',self.mainWin)
+        self.imageMenuConvertTo16Bit.triggered.connect(self.convertImage)
+        self.imageMenuConvert.addActions([self.imageMenuConvertTo8Bit,self.imageMenuConvertTo16Bit])
+        
+        self.imageMenuRange = self.imageMenu.addMenu('Set Range')
         self.imageMenuRangeLoad = QtGui.QAction('Load',self.mainWin)
         self.imageMenuRangeLoad.triggered.connect(self.loadImageRange)
         self.imageMenuRangeSave = QtGui.QAction('Save',self.mainWin)
@@ -179,11 +185,30 @@ class ImageGui():
         
         # analysis menu
         self.analysisMenu = self.menuBar.addMenu('Analysis')
-        self.analysisMenuMeasure = self.analysisMenu.addMenu('Measure Points')
-        self.analysisMenuMeasureDisplay = QtGui.QAction('Display',self.mainWin)
-        self.analysisMenuMeasureClipboard = QtGui.QAction('Send To Clipboard',self.mainWin)
-        self.analysisMenuMeasureSave = QtGui.QAction('Save',self.mainWin)
-        self.analysisMenuMeasure.addActions([self.analysisMenuMeasureDisplay,self.analysisMenuMeasureClipboard,self.analysisMenuMeasureSave])
+        self.analysisMenuPoints = self.analysisMenu.addMenu('Points')
+        self.analysisMenuPointsMeasure = self.analysisMenuPoints.addMenu('Measure')
+        self.analysisMenuPointsMeasureDisplay = QtGui.QAction('Display',self.mainWin)
+        self.analysisMenuPointsMeasureClipboard = QtGui.QAction('Send To Clipboard',self.mainWin)
+        self.analysisMenuPointsMeasureSave = QtGui.QAction('Save',self.mainWin)
+        self.analysisMenuPointsMeasure.addActions([self.analysisMenuPointsMeasureDisplay,self.analysisMenuPointsMeasureClipboard,self.analysisMenuPointsMeasureSave])
+        self.analysisMenuPointsTriangles = QtGui.QAction('Draw Delauney Triangles',self.mainWin)
+        self.analysisMenuPointsTriangles.triggered.connect(self.drawDelauneyTriangles)
+        self.analysisMenuPoints.addAction(self.analysisMenuPointsTriangles)
+        self.analysisMenuPointsCopy = self.analysisMenuPoints.addMenu('Copy')
+        self.analysisMenuPointsCopyFlip = QtGui.QAction('Flip',self.mainWin)
+        self.analysisMenuPointsCopyFlip.triggered.connect(self.copyPoints)
+        self.analysisMenuPointsCopyPrevious = QtGui.QAction('Previous',self.mainWin)
+        self.analysisMenuPointsCopyPrevious.triggered.connect(self.copyPoints)
+        self.analysisMenuPointsCopyNext = QtGui.QAction('Next',self.mainWin)
+        self.analysisMenuPointsCopyNext.triggered.connect(self.copyPoints)
+        self.analysisMenuPointsCopy.addActions([self.analysisMenuPointsCopyFlip,self.analysisMenuPointsCopyPrevious,self.analysisMenuPointsCopyNext])
+        self.analysisMenuPointsLoad = QtGui.QAction('Load',self.mainWin)
+        self.analysisMenuPointsLoad.triggered.connect(self.loadPoints)
+        self.analysisMenuPointsSave = QtGui.QAction('Save',self.mainWin)
+        self.analysisMenuPointsSave.triggered.connect(self.savePoints)
+        self.analysisMenuPointsClear = QtGui.QAction('Clear',self.mainWin)
+        self.analysisMenuPointsClear.triggered.connect(self.clearPoints)
+        self.analysisMenuPoints.addActions([self.analysisMenuPointsLoad,self.analysisMenuPointsSave,self.analysisMenuPointsClear])
         
         self.analysisMenuContours = self.analysisMenu.addMenu('Contours')
         self.analysisMenuContoursFind = self.analysisMenuContours.addMenu('Find')
@@ -410,7 +435,7 @@ class ImageGui():
         self.levelsPlotItem.getAxis('left').setTicks([[(0,'0')],[]])
         self.levelsPlotItem.getAxis('bottom').setTicks([[(0,'0'),(100,'100'),(200,'200')],[]])
         self.levelsPlotItem.setXRange(0,255)
-        self.levelsPlot = self.levelsPlotItem.plot(np.zeros(256))
+        self.levelsPlot = self.levelsPlotItem.plot(x=[],y=[])
         self.lowLevelLine = pg.InfiniteLine(pos=0,pen='r',movable=True,bounds=(0,254))
         self.lowLevelLine.sigPositionChangeFinished.connect(self.lowLevelLineCallback)
         self.levelsPlotItem.addItem(self.lowLevelLine)
@@ -432,29 +457,37 @@ class ImageGui():
         self.showLevelsGroupBox.setMinimumWidth(10)
         self.showLevelsGroupBox.setMinimumWidth(125)
         
-        self.gammaLabel = QtGui.QLabel('Gamma')
-        self.gammaEdit = QtGui.QLineEdit('')
-        self.gammaEdit.setAlignment(QtCore.Qt.AlignHCenter)
-        self.gammaEdit.editingFinished.connect(self.gammaEditCallback)
+        self.lowLevelBox = QtGui.QSpinBox()
+        self.lowLevelBox.setPrefix('Low Level:  ')
+        self.lowLevelBox.setRange(0,254)
+        self.lowLevelBox.setSingleStep(1)
+        self.lowLevelBox.setValue(0)
+        self.lowLevelBox.valueChanged.connect(self.lowLevelBoxCallback)
         
-        self.gammaSlider = QtGui.QSlider()
-        self.gammaSlider.setOrientation(QtCore.Qt.Horizontal)
-        self.gammaSlider.setRange(5,300)
-        self.gammaSlider.setValue(100)
-        self.gammaSlider.setSingleStep(1)
-        self.gammaSlider.sliderReleased.connect(self.gammaSliderCallback)
+        self.highLevelBox = QtGui.QSpinBox()
+        self.highLevelBox.setPrefix('High Level:  ')
+        self.highLevelBox.setRange(1,255)
+        self.highLevelBox.setSingleStep(1)
+        self.highLevelBox.setValue(255)
+        self.highLevelBox.valueChanged.connect(self.highLevelBoxCallback)
         
-        self.alphaLabel = QtGui.QLabel('Alpha')
-        self.alphaEdit = QtGui.QLineEdit('')
-        self.alphaEdit.setAlignment(QtCore.Qt.AlignHCenter)
-        self.alphaEdit.editingFinished.connect(self.alphaEditCallback)
+        self.gammaBox = QtGui.QDoubleSpinBox()
+        self.gammaBox.setPrefix('Gamma:  ')
+        self.gammaBox.setDecimals(2)
+        self.gammaBox.setRange(0.05,3)
+        self.gammaBox.setSingleStep(0.01)
+        self.gammaBox.setValue(1)
+        self.gammaBox.valueChanged.connect(self.gammaBoxCallback)
         
-        self.alphaSlider = QtGui.QSlider()
-        self.alphaSlider.setOrientation(QtCore.Qt.Horizontal)
-        self.alphaSlider.setRange(0,100)
-        self.alphaSlider.setValue(100)
-        self.alphaSlider.setSingleStep(1)
-        self.alphaSlider.sliderReleased.connect(self.alphaSliderCallback)
+        self.alphaBox = QtGui.QDoubleSpinBox()
+        self.alphaBox.setPrefix('Alpha:  ')
+        self.alphaBox.setDecimals(2)
+        self.alphaBox.setRange(0,1)
+        self.alphaBox.setSingleStep(0.01)
+        self.alphaBox.setValue(1)
+        self.alphaBox.valueChanged.connect(self.alphaBoxCallback)
+        
+        self.levelsBoxes = (self.lowLevelBox,self.highLevelBox,self.gammaBox,self.alphaBox)
         
         self.resetLevelsButton = QtGui.QPushButton('Reset Levels')
         self.resetLevelsButton.clicked.connect(self.resetLevelsButtonCallback)
@@ -466,34 +499,26 @@ class ImageGui():
         self.showBinaryCheckbox.clicked.connect(self.showBinaryCheckboxCallback)
         
         self.levelsControlLayout = QtGui.QGridLayout()
-        self.levelsControlLayout.addWidget(self.showLevelsGroupBox,0,0,1,4)
-        self.levelsControlLayout.addWidget(self.gammaLabel,1,0,1,1)
-        self.levelsControlLayout.addWidget(self.gammaEdit,1,1,1,1)
-        self.levelsControlLayout.addWidget(self.gammaSlider,1,2,1,2)
-        self.levelsControlLayout.addWidget(self.alphaLabel,2,0,1,1)
-        self.levelsControlLayout.addWidget(self.alphaEdit,2,1,1,1)
-        self.levelsControlLayout.addWidget(self.alphaSlider,2,2,1,2)
-        self.levelsControlLayout.addWidget(self.resetLevelsButton,3,0,1,2)
-        self.levelsControlLayout.addWidget(self.normDisplayCheckbox,3,2,1,2)
-        self.levelsControlLayout.addWidget(self.showBinaryCheckbox,4,2,1,2)
+        self.levelsControlLayout.addWidget(self.showLevelsGroupBox,0,0,1,2)
+        self.levelsControlLayout.addWidget(self.lowLevelBox,1,0,1,1)
+        self.levelsControlLayout.addWidget(self.highLevelBox,1,1,1,1)
+        self.levelsControlLayout.addWidget(self.gammaBox,2,0,1,1)
+        self.levelsControlLayout.addWidget(self.alphaBox,2,1,1,1)
+        self.levelsControlLayout.addWidget(self.resetLevelsButton,3,0,1,1)
+        self.levelsControlLayout.addWidget(self.normDisplayCheckbox,3,1,1,1)
+        self.levelsControlLayout.addWidget(self.showBinaryCheckbox,4,1,1,1)
         
         # mark points tab        
-        self.loadPointsButton = QtGui.QPushButton('Load')
-        self.loadPointsButton.clicked.connect(self.loadPointsButtonCallback)
-        
-        self.savePointsButton = QtGui.QPushButton('Save')
-        self.savePointsButton.clicked.connect(self.savePointsButtonCallback)
+        self.markPointsColorMenu = QtGui.QComboBox()
+        self.markPointsColorMenu.addItems(self.plotColorOptions)
+        self.markPointsColorMenu.setCurrentIndex(4)
+        self.markPointsColorMenu.currentIndexChanged.connect(self.markPointsColorMenuCallback)
         
         self.decreasePointSizeButton = QtGui.QPushButton('-')
         self.decreasePointSizeButton.clicked.connect(self.decreasePointSizeButtonCallback)
         
         self.increasePointSizeButton = QtGui.QPushButton('+')
         self.increasePointSizeButton.clicked.connect(self.increasePointSizeButtonCallback)
-        
-        self.markPointsColorMenu = QtGui.QComboBox()
-        self.markPointsColorMenu.addItems(self.plotColorOptions)
-        self.markPointsColorMenu.setCurrentIndex(4)
-        self.markPointsColorMenu.currentIndexChanged.connect(self.markPointsColorMenuCallback)
         
         self.markPointsTable = QtGui.QTableWidget(1,3)
         self.markPointsTable.resizeEvent = self.markPointsTableResizeCallback
@@ -505,12 +530,10 @@ class ImageGui():
             self.markPointsTable.setItem(0,col,item)
         
         self.markPointsLayout = QtGui.QGridLayout()
-        self.markPointsLayout.addWidget(self.loadPointsButton,0,0,1,2)
-        self.markPointsLayout.addWidget(self.savePointsButton,1,0,1,2)
-        self.markPointsLayout.addWidget(self.markPointsColorMenu,0,2,1,2)
-        self.markPointsLayout.addWidget(self.decreasePointSizeButton,1,2,1,1)
-        self.markPointsLayout.addWidget(self.increasePointSizeButton,1,3,1,1)
-        self.markPointsLayout.addWidget(self.markPointsTable,2,0,4,4)
+        self.markPointsLayout.addWidget(self.markPointsColorMenu,0,0,1,2)
+        self.markPointsLayout.addWidget(self.decreasePointSizeButton,0,2,1,1)
+        self.markPointsLayout.addWidget(self.increasePointSizeButton,0,3,1,1)
+        self.markPointsLayout.addWidget(self.markPointsTable,1,0,4,4)
         self.markPointsTab = QtGui.QWidget()
         self.markPointsTab.setLayout(self.markPointsLayout)
         self.tabs = QtGui.QTabWidget()
@@ -535,8 +558,8 @@ class ImageGui():
         self.alignCheckbox = QtGui.QCheckBox('Align')
         self.alignCheckbox.clicked.connect(self.alignCheckboxCallback)
         
-        self.copyPointsButton = QtGui.QPushButton('Copy Points')
-        self.copyPointsButton.clicked.connect(self.copyPointsButtonCallback)
+        self.copyRefPointsButton = QtGui.QPushButton('Copy Points')
+        self.copyRefPointsButton.clicked.connect(self.copyRefPointsButtonCallback)
         
         self.alignLayout = QtGui.QGridLayout()
         self.alignLayout.addWidget(self.alignRefLabel,0,0,1,1)
@@ -546,7 +569,7 @@ class ImageGui():
         self.alignLayout.addWidget(self.alignEndLabel,2,0,1,1)
         self.alignLayout.addWidget(self.alignEndEdit,2,1,1,1)
         self.alignLayout.addWidget(self.alignCheckbox,3,0,1,1)
-        self.alignLayout.addWidget(self.copyPointsButton,3,1,1,1)
+        self.alignLayout.addWidget(self.copyRefPointsButton,3,1,1,1)
         self.alignTab = QtGui.QWidget()
         self.alignTab.setLayout(self.alignLayout)
         self.tabs.addTab(self.alignTab,'Align')
@@ -583,12 +606,12 @@ class ImageGui():
         cv2.imwrite(filePath,self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1,::-1])
         
     def saveVolume(self):
-        source = self.mainWin.sender()
-        if source==self.fileMenuSaveVolumeImages:
+        sender = self.mainWin.sender()
+        if sender==self.fileMenuSaveVolumeImages:
             fileType = 'Image (*.tif  *.png *.jpg)'
-        elif source==self.fileMenuSaveVolumeMovie:
+        elif sender==self.fileMenuSaveVolumeMovie:
             fileType = '*.avi'
-        elif source==self.fileMenuSaveVolumeNpz:
+        elif sender==self.fileMenuSaveVolumeNpz:
             fileType = '*.npz'
         else:
             fileType = '*.mat'
@@ -607,7 +630,7 @@ class ImageGui():
                 return
             vidOut = cv2.VideoWriter(filePath,-1,frameRate,volumeShape[1::-1])
         elif fileType in ('npz','mat'):
-            data = np.zeros(volumeShape+(3,),dtype=np.uint8)
+            data = np.zeros(volumeShape+(3,),dtype=self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].dtype)
         for i,imgInd in enumerate(range(zRange[0],zRange[1]+1)):
             self.imageIndex[self.selectedWindow][axis] = imgInd
             img = self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1]
@@ -695,7 +718,7 @@ class ImageGui():
         self.imageShape[self.selectedWindow] = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].shape[:3]
         self.imageRange[self.selectedWindow] = [[0,s-1] for s in self.imageShape[self.selectedWindow]]
         self.imageIndex[self.selectedWindow] = [0,0,0]
-        self.levelsMax[self.selectedWindow] = 2**16-1 if self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].dtype==np.uint16 else 2**8-1
+        self.updateLevelsRange()
         self.displayImageInfo()
         self.setViewBoxRangeLimits()
         self.setViewBoxRange(self.displayedWindows)
@@ -734,7 +757,6 @@ class ImageGui():
         self.updateChannelList()
         self.displayImageRange()
         self.displayPixelSize()
-        self.updateLevelsMax()
         self.displayImageLevels()
         
     def displayImageRange(self):
@@ -758,6 +780,79 @@ class ImageGui():
         else:
             self.imagePixelSizeLabel.setText(u'XYZ Pixel Size (\u03BCm): ')
             
+    def updateLevelsRange(self):
+        self.levelsMax[self.selectedWindow] = 2**8-1 if self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].dtype==np.uint8 else 2**16-1
+        self.levelsPlotItem.setXRange(0,self.levelsMax[self.selectedWindow])
+        ticks = [(0,'0'),(100,'100'),(200,'200')] if self.levelsMax[self.selectedWindow]==255 else [(0,'0'),(30000,'30000'),(60000,'60000')]
+        self.levelsPlotItem.getAxis('bottom').setTicks([ticks,[]])
+        lowRange = (0,self.levelsMax[self.selectedWindow]-1)
+        highRange = (1,self.levelsMax[self.selectedWindow])
+        self.lowLevelLine.setBounds(lowRange)
+        self.highLevelLine.setBounds(highRange)
+        self.lowLevelBox.setRange(lowRange[0],lowRange[1])
+        self.highLevelBox.setRange(highRange[0],highRange[1])
+            
+    def displayImageLevels(self):
+        for box in self.levelsBoxes:
+            box.blockSignals(True)
+        fileInd = set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex)
+        if len(fileInd)>0:
+            isSet = False
+            if self.showVolumeLevelsButton.isChecked():
+                pixIntensityHist = np.zeros(self.levelsMax[self.selectedWindow]+1)
+            for i in fileInd:
+                channels = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannels[self.selectedWindow]
+                channels = [ch for ch in channels if ch<self.imageObjs[i].shape[3]]
+                if len(channels)>0:
+                    if self.showVolumeLevelsButton.isChecked():
+                        pixIntensityHist += np.histogram(self.imageObjs[i].getData(channels),np.arange(self.levelsMax[self.selectedWindow]+2))[0]
+                    if not isSet:
+                        levels = self.imageObjs[i].levels[channels[0]]
+                        self.lowLevelLine.setValue(levels[0])
+                        self.highLevelLine.setValue(levels[1])
+                        self.lowLevelBox.setValue(levels[0])
+                        self.highLevelBox.setValue(levels[1])
+                        self.gammaBox.setValue(self.imageObjs[i].gamma[channels[0]])
+                        self.alphaBox.setValue(self.imageObjs[i].alpha)
+                        isSet = True
+            if self.showVolumeLevelsButton.isChecked():
+                self.updateLevelsPlot(pixIntensityHist)
+        else:
+            self.lowLevelLine.setValue(0)
+            self.highLevelLine.setValue(self.levelsMax[self.selectedWindow])
+            self.lowLevelBox.setValue(0)
+            self.highLevelBox.setValue(self.levelsMax[self.selectedWindow])
+            self.gammaBox.setValue(1)
+            self.alphaBox.setValue(1)
+            self.updateLevelsPlot()
+        for box in self.levelsBoxes:
+            box.blockSignals(False)             
+                
+    def updateLevelsPlot(self,pixIntensityHist=None):
+        if pixIntensityHist is None:
+            self.levelsPlot.setData(x=[],y=[])
+            self.levelsPlotItem.setYRange(0,1)
+            self.levelsPlotItem.getAxis('left').setTicks([[(0,'0'),(1,'1')],[]])
+        else:
+            pixIntensityHist[pixIntensityHist<1] = 1
+            pixIntensityHist = np.log10(pixIntensityHist)
+            self.levelsPlot.setData(pixIntensityHist)
+            histMax = pixIntensityHist.max()
+            self.levelsPlotItem.setYRange(0,round(histMax))
+            self.levelsPlotItem.getAxis('left').setTicks([[(0,'0'),(int(histMax),'1e'+str(int(histMax)))],[]])
+            
+    def convertImage(self):
+        self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
+        sender = self.mainWin.sender()
+        dtype = np.uint8 if sender is self.imageMenuConvertTo8Bit else np.uint16
+        for fileInd in self.selectedFileIndex:
+            if self.imageObjs[fileInd].dtype!=dtype:
+                self.imageObjs[fileInd].convertDtype()
+        if self.selectedWindow in self.getAffectedWindows():
+            self.updateLevelsRange()
+            self.displayImageLevels()
+            self.displayImage()
+            
     def setPixelSize(self):
         if self.mainWin.sender() is self.imageMenuPixelSizeXY:
             dim = 'XY'
@@ -772,58 +867,6 @@ class ImageGui():
                     self.imageObjs[fileInd].pixelSize[i] = val
             self.displayPixelSize()
             
-    def updateLevelsMax(self):
-        if len(self.checkedFileIndex[self.selectedWindow])>0:
-            self.levelsPlotItem.setXRange(0,self.levelsMax[self.selectedWindow])
-            ticks = [(0,'0'),(100,'100'),(200,'200')] if self.levelsMax[self.selectedWindow]==255 else [(0,'0'),(30000,'30000'),(60000,'60000')]
-            self.levelsPlotItem.getAxis('bottom').setTicks([ticks,[]])
-            self.lowLevelLine.setBounds((0,self.levelsMax[self.selectedWindow]-1))
-            self.highLevelLine.setBounds((1,self.levelsMax[self.selectedWindow]))
-            
-    def displayImageLevels(self):
-        fileInd = set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex)
-        if len(fileInd)>0:
-            isSet = False
-            if self.showVolumeLevelsButton.isChecked():
-                pixIntensityHist = np.zeros(self.levelsMax[self.selectedWindow]+1)
-            for i in fileInd:
-                channels = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannels[self.selectedWindow]
-                channels = [ch for ch in channels if ch<self.imageObjs[i].shape[3]]
-                if len(channels)>0:
-                    if self.showVolumeLevelsButton.isChecked():
-                        pixIntensityHist += np.histogram(self.imageObjs[i].getData(channels),np.arange(self.levelsMax[self.selectedWindow]+2))[0]
-                    if not isSet:
-                        self.lowLevelLine.setValue(self.imageObjs[i].levels[channels[0]][0])
-                        self.highLevelLine.setValue(self.imageObjs[i].levels[channels[0]][1])
-                        self.gammaEdit.setText(str(self.imageObjs[i].gamma[channels[0]]))
-                        self.gammaSlider.setValue(self.imageObjs[i].gamma[channels[0]]*100)
-                        self.alphaEdit.setText(str(self.imageObjs[i].alpha))
-                        self.alphaSlider.setValue(self.imageObjs[i].alpha*100)
-                        isSet = True
-            if self.showVolumeLevelsButton.isChecked():
-                self.updateLevelsPlot(pixIntensityHist)
-        else:
-            self.lowLevelLine.setValue(0)
-            self.highLevelLine.setValue(self.levelsMax[self.selectedWindow])
-            self.gammaEdit.setText('')
-            self.gammaSlider.setValue(100)
-            self.alphaEdit.setText('')
-            self.alphaSlider.setValue(100)
-            self.updateLevelsPlot()                
-                
-    def updateLevelsPlot(self,pixIntensityHist=None):
-        if pixIntensityHist is None:
-            self.levelsPlot.setData(np.zeros(self.levelsMax[self.selectedWindow]+1))
-            self.levelsPlotItem.setYRange(0,1)
-            self.levelsPlotItem.getAxis('left').setTicks([[(0,'0'),(1,'1')],[]])
-        else:
-            pixIntensityHist[pixIntensityHist<1] = 1
-            pixIntensityHist = np.log10(pixIntensityHist)
-            self.levelsPlot.setData(pixIntensityHist)
-            histMax = pixIntensityHist.max()
-            self.levelsPlotItem.setYRange(0,round(histMax))
-            self.levelsPlotItem.getAxis('left').setTicks([[(0,'0'),(int(histMax),'1e'+str(int(histMax)))],[]])
-            
     def resampleImage(self):
         sender = self.mainWin.sender()
         if sender==self.imageMenuResamplePixelSize:
@@ -836,7 +879,7 @@ class ImageGui():
             scaleFactor,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Resample Scale Factor','scale factor (new/old size):',1,min=0.001,decimals=4)
             if not ok or scaleFactor==1:
                 return
-        self.checkIfSelectedDisplayedBeforeShapeChange()            
+        self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()            
         for fileInd in self.selectedFileIndex:
             oldPixelSize = self.imageObjs[fileInd].pixelSize[0]
             if sender==self.imageMenuResamplePixelSize:
@@ -875,7 +918,7 @@ class ImageGui():
         self.displayImage(self.getAffectedWindows())
         
     def rotateImage90(self):
-        self.checkIfSelectedDisplayedBeforeShapeChange()
+        self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
         for fileInd in self.selectedFileIndex:
             self.imageObjs[fileInd].rotate90()
         affectedWindows = self.getAffectedWindows()
@@ -893,7 +936,7 @@ class ImageGui():
         self.displayImage(affectedWindows)
         
     def transformImage(self):
-        self.checkIfSelectedDisplayedBeforeShapeChange()
+        self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
         refWin = self.alignRefWindow[self.selectedWindow]
         if refWin is None:
             raise Exception('Image must be aligned to reference before transforming')
@@ -943,13 +986,11 @@ class ImageGui():
             raise Exception('Image must be aligned to reference before warping')
         refPoints = self.markedPoints[refWin]
         warpPoints = self.markedPoints[self.selectedWindow]
-        if refPoints is None or warpPoints is None or refPoints.shape[0]!=warpPoints.shape[0]:
-            raise Exception('Equal number of points required in reference and aligned windows')
         shapeIndex = self.imageShapeIndex[refWin]
         axis = shapeIndex[2]
         rng = self.imageRange[self.selectedWindow][axis]
         h,w = (self.imageShape[refWin][i] for i in shapeIndex[:2])
-        boundaryPts = [(0,0),(w/2,0),(w-1,0),(w-1,h/2),(w-1,h-1),(w/2,h-1),(0,h-1),(0,h/2)]
+        boundaryPts = getDelauneyBoundaryPoints(w,h)
         for fileInd in self.checkedFileIndex[self.selectedWindow]:
             imageData = self.imageObjs[fileInd].data[:,:,rng[0]:rng[1]+1].copy()
             for ind,imgInd in enumerate(range(rng[0],rng[1]+1)):
@@ -957,12 +998,8 @@ class ImageGui():
                 refInd = self.getAlignedRefImageIndex(self.selectedWindow,imgInd)
                 if refInd in refPoints[:,axis] and imgInd in warpPoints[:,axis]:
                     refPts,warpPts = (np.concatenate((pts[pts[:,axis]==i][:,shapeIndex[1::-1]],boundaryPts),axis=0).astype(np.float32) for pts,i in zip((refPoints,warpPoints),(refInd,imgInd)))
-                    # get Delaunay triangles as indices of points (point1Index,point2Index,point3Index)
-                    subdiv = cv2.Subdiv2D((0,0,w,h))
-                    for pt in refPts:
-                        subdiv.insert((pt[0],pt[1]))
-                    triangles = subdiv.getTriangleList()
-                    triangles = triangles[np.all(triangles>=0,axis=1) & np.all(triangles[:,::2]<w,axis=1) & np.all(triangles[:,1::2]<h,axis=1)]
+                    # get Delaunay triangles as indices of refPts (point1Index,point2Index,point3Index)
+                    triangles = getDelauneyTriangles(refPts,w,h)
                     triPtInd = np.zeros((triangles.shape[0],3),dtype=int)
                     for i,tri in enumerate(triangles):
                         for j in (0,2,4):
@@ -986,21 +1023,19 @@ class ImageGui():
         self.displayImage()
     
     def makeCCFVolume(self):
-        self.checkIfSelectedDisplayedBeforeShapeChange()
+        self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
         refWin = self.alignRefWindow[self.selectedWindow]
         if refWin is None or self.imageObjs[self.checkedFileIndex[refWin][0]].fileType!='atlas' or self.imageShapeIndex[self.selectedWindow][2]!=2:
             raise Exception('Image must be aligned to Allen Atlas coronal sections')
         rng = self.imageRange[self.selectedWindow][2]
         refShape = self.imageObjs[self.checkedFileIndex[refWin][0]].shape[:3]
         for fileInd in self.checkedFileIndex[self.selectedWindow]:
-            dataIter = self.imageObjs[fileInd].getDataIterator(rangeSlice=slice(rng[0],rng[1]+1))
-            ccfData = np.zeros(refShape+(self.imageObjs[fileInd].shape[3],),dtype=self.imageObjs[fileInd].dtype)
-            for i in range(rng[0],rng[1]+1):
-                alignInd = np.where(self.alignIndex[self.selectedWindow]==i)[0]
-                for ch in range(ccfData.shape[3]):
-                    img = next(dataIter)
-                    for ind in alignInd:
-                        ccfData[:,:,ind,ch] = img
+            data = self.imageObjs[fileInd].data[:,:,rng[0]:rng[1]+1]
+            x = np.arange(data.shape[2])
+            intp = scipy.interpolate.interp1d(x,data,axis=2)
+            alignInd = self.alignIndex[self.selectedWindow]>=0
+            ccfData = np.zeros(refShape+(data.shape[3],),dtype=data.dtype)
+            ccfData[:,:,alignInd] = intp(np.linspace(x[0],x[-1],np.count_nonzero(alignInd)))
             self.imageObjs[fileInd].data = ccfData
             self.imageObjs[fileInd].shape = ccfData.shape
         self.imageIndex[self.selectedWindow][2] = np.where(self.alignIndex[self.selectedWindow]==rng[0])[0][0]
@@ -1012,11 +1047,11 @@ class ImageGui():
         self.displayImageInfo()
         self.displayImage()
         
-    def checkIfSelectedDisplayedBeforeShapeChange(self):
+    def checkIfSelectedDisplayedBeforeDtypeOrShapeChange(self):
         for window in self.displayedWindows:
             selected = [True if i in self.selectedFileIndex else False for i in self.checkedFileIndex[window]]
             if (self.linkWindowsCheckbox.isChecked() or any(selected)) and not all(selected):
-                raise Exception('Must select all images displayed in the same window or in linked windows before shape change')
+                raise Exception('Must select all images displayed in the same window or in linked windows before data type or shape change')
             
     def setViewBoxRangeLimits(self,windows=None):
         if windows is None:
@@ -1102,7 +1137,8 @@ class ImageGui():
             windows = [self.selectedWindow]
         for window in windows:
             image = self.getImage(window,downsample=self.displayDownsample[window])
-            self.imageItem[window].setImage(image.transpose((1,0,2)),levels=[0,self.levelsMax[window]])
+            levels = [0,255] if image.dtype==np.uint8 else [0,self.levelsMax[window]]
+            self.imageItem[window].setImage(image.transpose((1,0,2)),levels=levels)
             if self.showImageLevelsButton.isChecked() and window is self.selectedWindow:
                 self.updateLevelsPlot(np.histogram(image,np.arange(self.levelsMax[window]+2))[0])
         self.plotMarkedPoints(windows)
@@ -1110,6 +1146,8 @@ class ImageGui():
     def getImage(self,window=None,downsample=1,binary=False):
         if window is None:
             window = self.selectedWindow
+        if self.showBinaryState[window]:
+            binary = True
         imageShape = [int(math.ceil(self.imageShape[window][i]/downsample)) for i in self.imageShapeIndex[window][:2]]
         image = np.zeros((imageShape[0],imageShape[1],3))
         for fileInd in self.checkedFileIndex[window]:
@@ -1129,7 +1167,7 @@ class ImageGui():
                 for ind,ch in enumerate(channels):
                     for k in imageObj.rgbInd[ch]:
                         if self.stitchState[window]:
-                            image[i,j,k] = np.maximum(image[i,j,k],data[:,:,ind])
+                            image[i,j,k] = np.maximum(image[i,j,k],data[:,:,ind],out=image[i,j,k])
                         elif imageObj.alpha<1 or alphaMap is not None:
                             image[i,j,k] += data[:,:,ind]
                         else:
@@ -1140,11 +1178,11 @@ class ImageGui():
             imageMax = image.max()
             if imageMax>0:
                 image *= self.levelsMax[window]/imageMax
-        dtype = np.uint8 if self.levelsMax[window]==255 else np.uint16
+        dtype = np.uint8 if self.levelsMax[window]==255 or binary else np.uint16
         image = image.astype(dtype)
         for regionInd in self.selectedAtlasRegions[window]:
             _,contours,_ = cv2.findContours(self.getAtlasRegion(window,self.atlasRegionIDs[regionInd],downsample).copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(image,contours,-1,(self.levelsMax[window],)*3)
+            cv2.drawContours(image,contours,-1,(self.levelsMax[window],)*3,1,cv2.LINE_AA)
         return image
                     
     def getImageData(self,imageObj,fileInd,window,channels,downsample,binary):
@@ -1189,9 +1227,9 @@ class ImageGui():
         data = data[::downsample,::downsample].astype(float)
         for chInd,ch in enumerate(channels):
             chData = data[:,:,chInd]
-            if binary or self.showBinaryState[window]:
+            if binary:
                 aboveThresh = chData>=imageObj.levels[ch][1]
-                chData[aboveThresh] = self.levelsMax[window]
+                chData[aboveThresh] = 255
                 chData[~aboveThresh] = 0
             else:
                 if imageObj.levels[ch][0]>0 or imageObj.levels[ch][1]<self.levelsMax[window]:
@@ -1289,19 +1327,16 @@ class ImageGui():
             self.updateStitchShape(windows)
             self.displayImage(windows)
         elif self.selectedPoint is not None and key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace,16777237,16777235,16777234,16777236):
-            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedPointWindow]
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
             for window in windows:
                 imgAxis = self.imageShapeIndex[window][2]
                 if self.markedPoints[window][self.selectedPoint,imgAxis]==self.imageIndex[window][imgAxis]:
                     if key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace):
                         if int(modifiers & QtCore.Qt.ControlModifier)>0 or self.markedPoints[window].shape[0]<2:
-                            self.clearMarkedPoints([window])
+                            self.clearMarkedPoints()
                         else:
-                            self.markedPoints[window] = np.delete(self.markedPoints[window],self.selectedPoint,0)
-                            if window==self.selectedWindow:
-                                self.markPointsTable.removeRow(self.selectedPoint)
-                            self.selectedPoint = None
-                            self.plotMarkedPoints([window])
+                            self.deleteSelectedPoint()
+                        return
                     else:
                         moveAxis,moveDist = self.getMoveParams(window,key,modifiers,True)
                         point = self.markedPoints[window][self.selectedPoint]
@@ -1315,12 +1350,6 @@ class ImageGui():
                             ind = 2 if moveAxis==2 else int(not moveAxis)
                             self.markPointsTable.item(self.selectedPoint,ind).setText(str(point[moveAxis]+1))
                         self.plotMarkedPoints([window])
-        elif key==QtCore.Qt.Key_B and int(modifiers & QtCore.Qt.ControlModifier)>0 and self.markedPoints[self.selectedWindow] is not None:
-            pts = self.markedPoints[self.selectedWindow].copy()
-            pts[:,1] = np.absolute(self.imageShape[self.selectedWindow][1]-1-pts[:,1])
-            self.markedPoints[self.selectedWindow] = np.concatenate((self.markedPoints[self.selectedWindow],pts))
-            self.fillPointsTable(append=True)
-            self.plotMarkedPoints([self.selectedWindow])
                     
     def getMoveParams(self,window,key,modifiers,flipVert=False):
         down,up = 16777237,16777235
@@ -1380,7 +1409,6 @@ class ImageGui():
             rows = np.where(self.markedPoints[window][:,axis]==self.imageIndex[window][axis])[0]
             if len(rows)>0:
                 self.selectedPoint = rows[np.argmin(np.sum(np.absolute(self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]]-[y,x]),axis=1))]
-                self.selectedPointWindow = window
         
     def imageDoubleClickCallback(self,event,window):
         x,y = event.pos().x(),event.pos().y()
@@ -1391,7 +1419,6 @@ class ImageGui():
             if window==self.selectedWindow:
                 self.fillPointsTable(append=True)
         self.selectedPoint = self.markedPoints[window].shape[0]-1
-        self.selectedPointWindow = window
         self.plotMarkedPoints(windows)
         
     def fileListboxSelectionCallback(self):
@@ -1607,6 +1634,7 @@ class ImageGui():
             region.setChecked(ind in self.selectedAtlasRegions[window])
         self.clearPointsTable()
         self.fillPointsTable()
+        self.selectedPoint = None
         isAligned = self.alignRefWindow[window] is not None
         self.alignCheckbox.setChecked(isAligned)
         alignRange = [str(self.alignRange[window][i]+1) if self.alignRange[window][i] is not None else '' for i in (0,1)]
@@ -1622,9 +1650,9 @@ class ImageGui():
             if len(self.displayedWindows)>1:
                 imageObj = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]]
                 otherWindows = [w for w in self.displayedWindows if w!=self.selectedWindow]
-                if any(self.imageObjs[self.checkedFileIndex[window][0]].dtype!=imageObj.dtype or self.imageObjs[self.checkedFileIndex[window][0]].shape[:3]!=imageObj.shape[:3] for window in otherWindows):
+                if any(self.imageObjs[self.checkedFileIndex[window][0]].shape[:3]!=imageObj.shape[:3] for window in otherWindows):
                     self.linkWindowsCheckbox.setChecked(False)
-                    raise Exception('Image data types and shapes must be equal when linking windows')
+                    raise Exception('Image shapes must be equal when linking windows')
                 for window in otherWindows:
                     self.imageRange[window] = self.imageRange[self.selectedWindow][:]
                 self.setViewBoxRange(self.displayedWindows)
@@ -1769,12 +1797,12 @@ class ImageGui():
                     line.setPen(color)
         
     def view3dSliceLineDragged(self):
-        source = self.mainWin.sender()
+        sender = self.mainWin.sender()
         for window,lines in enumerate(self.view3dSliceLines):
-            if source in lines:
-                axis = self.imageShapeIndex[window][lines.index(source)]
+            if sender in lines:
+                axis = self.imageShapeIndex[window][lines.index(sender)]
                 break 
-        self.updateView3dLines([axis],[int(source.value())])
+        self.updateView3dLines([axis],[int(sender.value())])
         
     def updateView3dLines(self,axes,position):
         for window in self.displayedWindows:
@@ -1882,10 +1910,10 @@ class ImageGui():
             self.setImageRange()
         
     def rangeEditCallback(self):
-        source = self.mainWin.sender()
+        sender = self.mainWin.sender()
         for axis,boxes in enumerate(self.rangeEditBoxes):
-            if source in boxes:
-                rangeInd = boxes.index(source)
+            if sender in boxes:
+                rangeInd = boxes.index(sender)
                 break
         if rangeInd==0:
             newVal = int(self.rangeEditBoxes[axis][0].text())-1
@@ -1989,14 +2017,38 @@ class ImageGui():
         self.setImageRange(savedRange)
         
     def lowLevelLineCallback(self):
-        newVal = self.lowLevelLine.value()
-        self.highLevelLine.setBounds((newVal+1,self.levelsMax[self.selectedWindow]))
-        self.setLevels(newVal,levelsInd=0)
+        val = self.lowLevelLine.value()
+        self.lowLevelBox.blockSignals(True)
+        self.lowLevelBox.setValue(val)
+        self.lowLevelBox.blockSignals(False)
+        self.setLowLevel(val)
          
     def highLevelLineCallback(self):
-        newVal = self.highLevelLine.value()
-        self.lowLevelLine.setBounds((0,newVal-1))
-        self.setLevels(newVal,levelsInd=1)
+        val = self.highLevelLine.value()
+        self.highLevelBox.blockSignals(True)
+        self.highLevelBox.setValue(val)
+        self.highLevelBox.blockSignals(False)
+        self.setHighLevel(val)
+        
+    def lowLevelBoxCallback(self,val):
+        self.lowLevelLine.setValue(val)
+        self.setLowLevel(val)
+    
+    def highLevelBoxCallback(self,val):
+        self.highLevelLine.setValue(val)
+        self.setHighLevel(val)
+        
+    def setLowLevel(self,val):
+        highRange = (val+1,self.levelsMax[self.selectedWindow])
+        self.highLevelBox.setRange(highRange[0],highRange[1])
+        self.highLevelLine.setBounds(highRange)
+        self.setLevels(val,levelsInd=0)
+    
+    def setHighLevel(self,val):
+        lowRange = (0,val-1)
+        self.lowLevelBox.setRange(lowRange[0],lowRange[1])
+        self.lowLevelLine.setBounds(lowRange)
+        self.setLevels(val,levelsInd=1)
         
     def setLevels(self,newVal,levelsInd):
         channels = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannels[self.selectedWindow]
@@ -2015,56 +2067,30 @@ class ImageGui():
         else:
             self.displayImage()
         
-    def gammaEditCallback(self):
-        newVal = round(float(self.gammaEdit.text()),2)
-        if newVal<0.05:
-            newVal = 0.05
-        elif newVal>3:
-            newVal = 3
-        self.gammaEdit.setText(str(newVal))
-        self.gammaSlider.setValue(newVal*100)
-        self.setGamma(newVal)
-    
-    def gammaSliderCallback(self):
-        newVal = self.gammaSlider.value()/100
-        self.gammaEdit.setText(str(newVal))
-        self.setGamma(newVal)
-    
-    def setGamma(self,newVal):
+    def gammaBoxCallback(self,val):
         channels = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannels[self.selectedWindow]
         for fileInd in set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex):
             for ch in channels:
                 if ch<self.imageObjs[fileInd].shape[3]:
-                    self.imageObjs[fileInd].gamma[ch] = newVal
+                    self.imageObjs[fileInd].gamma[ch] = val
         self.displayImage(self.getAffectedWindows(channels))
         
-    def alphaEditCallback(self):
-        newVal = round(float(self.alphaEdit.text()),2)
-        if newVal<0:
-            newVal = 0
-        elif newVal>1:
-            newVal = 1
-        self.alphaEdit.setText(str(newVal))
-        self.alphaSlider.setValue(newVal*100)
-        self.setAlpha(newVal)
-    
-    def alphaSliderCallback(self):
-        newVal = self.alphaSlider.value()/100
-        self.alphaEdit.setText(str(newVal))
-        self.setAlpha(newVal)
-        
-    def setAlpha(self,newVal):
+    def alphaBoxCallback(self,val):
         for fileInd in set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex):
-            self.imageObjs[fileInd].alpha = newVal
+            self.imageObjs[fileInd].alpha = val
         self.displayImage(self.getAffectedWindows())
         
     def resetLevelsButtonCallback(self):
         self.lowLevelLine.setValue(0)
         self.highLevelLine.setValue(self.levelsMax[self.selectedWindow])
-        self.gammaEdit.setText('1')
-        self.gammaSlider.setValue(100)
-        self.alphaEdit.setText('1')
-        self.alphaSlider.setValue(100)
+        for box in self.levelsBoxes:
+            box.blockSignals(True)
+        self.lowLevelBox.setValue(0)
+        self.highLevelBox.setValue(self.levelsMax[self.selectedWindow])
+        self.gammaBox.setValue(1)
+        self.alphaBox.setValue(1)
+        for box in self.levelsBoxes:
+            box.blockSignals(False)
         channels = [self.viewChannelsSelectedCh] if self.viewChannelsCheckbox.isChecked() else self.selectedChannels[self.selectedWindow]
         for fileInd in self.selectedFileIndex:
             for ch in channels:
@@ -2143,11 +2169,22 @@ class ImageGui():
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
         for window in windows:
             self.markedPoints[window] = None
-            if self.selectedPoint is not None and window==self.selectedPointWindow:
-                self.selectedPoint = None
             if window==self.selectedWindow:
                 self.clearPointsTable()
+        self.selectedPoint = None
         self.plotMarkedPoints(windows)
+        
+    def deleteSelectedPoint(self):
+        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+        for window in windows:
+            self.markedPoints[window] = np.delete(self.markedPoints[window],self.selectedPoint,0)
+        self.markPointsTable.removeRow(self.selectedPoint)
+        self.selectedPoint = None
+        self.plotMarkedPoints()
+        
+    def markPointsColorMenuCallback(self):
+        self.markPointsColor = self.plotColors[self.markPointsColorMenu.currentIndex()]
+        self.plotMarkedPoints(self.displayedWindows)
     
     def decreasePointSizeButtonCallback(self):
         if self.markPointsSize>1:
@@ -2157,28 +2194,72 @@ class ImageGui():
     def increasePointSizeButtonCallback(self):
         self.markPointsSize += 1
         self.plotMarkedPoints(self.displayedWindows)
-    
-    def markPointsColorMenuCallback(self):
-        self.markPointsColor = self.plotColors[self.markPointsColorMenu.currentIndex()]
-        self.plotMarkedPoints(self.displayedWindows)
         
-    def loadPointsButtonCallback(self):
+    def drawDelauneyTriangles(self):
+        shapeIndex = self.imageShapeIndex[self.selectedWindow]
+        h,w = (self.imageShape[self.selectedWindow][i] for i in shapeIndex[:2])
+        axis = shapeIndex[2]
+        rng = self.imageRange[self.selectedWindow][axis] if self.sliceProjState[self.selectedWindow] else [self.imageIndex[self.selectedWindow][axis]]*2
+        rows = np.logical_and(self.markedPoints[self.selectedWindow][:,axis]>=rng[0],self.markedPoints[self.selectedWindow][:,axis]<=rng[1])
+        if any(rows):
+            boundaryPts = getDelauneyBoundaryPoints(w,h)
+            pts = np.concatenate((self.markedPoints[self.selectedWindow][rows][:,shapeIndex[1::-1]],boundaryPts),axis=0).astype(np.float32)
+            triangles = getDelauneyTriangles(pts,w,h)
+            image = self.getImage()
+            color = (self.levelsMax[self.selectedWindow],)*2+(0,)
+            for tri in triangles:
+                p = [(tri[j],tri[j+1])for j in (0,2,4)]
+                cv2.line(image,p[0],p[1],color,1,cv2.LINE_AA)
+                cv2.line(image,p[1],p[2],color,1,cv2.LINE_AA)
+                cv2.line(image,p[2],p[0],color,1,cv2.LINE_AA)
+            self.imageItem[self.selectedWindow].setImage(image.transpose((1,0,2)),levels=[0,self.levelsMax[self.selectedWindow]])
+        
+    def copyPoints(self):
+        if self.markedPoints[self.selectedWindow] is None:
+            return
+        sender = self.mainWin.sender()
+        axis = self.imageShapeIndex[self.selectedWindow][2]
+        ind = self.imageIndex[self.selectedWindow][axis]
+        if sender==self.analysisMenuPointsCopyPrevious:
+            ind -= 1
+        elif sender==self.analysisMenuPointsCopyNext:
+            ind += 1
+        rows = self.markedPoints[self.selectedWindow][:,axis]==ind
+        if not any(rows):
+            return
+        pts = self.markedPoints[self.selectedWindow][rows].copy()
+        if sender==self.analysisMenuPointsCopyFlip:
+            axis = self.imageShapeIndex[self.selectedWindow][1]
+            pts[:,axis] = np.absolute(self.imageShape[self.selectedWindow][axis]-1-pts[:,axis])
+        else:
+            pts[:,axis] = self.imageIndex[self.selectedWindow][axis]
+        self.markedPoints[self.selectedWindow] = np.concatenate((self.markedPoints[self.selectedWindow],pts))
+        self.fillPointsTable(append=True)
+        self.plotMarkedPoints([self.selectedWindow])
+        
+    def loadPoints(self):
         filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose saved points file',self.fileOpenPath,'*.npy')
         if filePath=='':
             return
         self.fileOpenPath = os.path.dirname(filePath)
+        pts = np.load(filePath)[:,(1,0,2)]-1
         if self.markedPoints[self.selectedWindow] is not None:
             self.clearMarkedPoints()
-        self.markedPoints[self.selectedWindow] = np.load(filePath)[:,(1,0,2)]-1
+        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+        for window in windows:
+            self.markedPoints[window] = pts
         self.fillPointsTable()
         self.plotMarkedPoints()
         
-    def savePointsButtonCallback(self):
+    def savePoints(self):
         filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
         np.save(filePath,self.markedPoints[self.selectedWindow][:,(1,0,2)]+1)
+        
+    def clearPoints(self):
+        self.clearMarkedPoints()
         
     def markPointsTableResizeCallback(self,event):
         w = int(self.markPointsTable.viewport().width()/3)
@@ -2202,7 +2283,7 @@ class ImageGui():
                 contents = contents[:-1]+'\n'
             self.app.clipboard().setText(contents)
             
-    def copyPointsButtonCallback(self):
+    def copyRefPointsButtonCallback(self):
         refWin = self.alignRefWindow[self.selectedWindow]
         if refWin is None:
             return
@@ -2294,14 +2375,15 @@ class ImageGui():
             self.contourHulls.append(cv2.convexHull(m))
             x,y,w,h = cv2.boundingRect(m)
             self.contourRectangles.append([x-1,y-1,w+2,h+2])
-        source = self.mainWin.sender()
-        if source is self.analysisMenuContoursFindRectangle:
+        color = (255,255,0)
+        sender = self.mainWin.sender()
+        if sender is self.analysisMenuContoursFindRectangle:
             for r in self.contourRectangles:
-                cv2.rectangle(image,(r[0],r[1]),(r[0]+r[2],r[1]+r[3]),(255,255,0),1)
+                cv2.rectangle(image,(r[0],r[1]),(r[0]+r[2],r[1]+r[3]),color,1,cv2.LINE_AA)
         else:
-            c = mergedContours if source is self.analysisMenuContoursFindContours else self.contourHulls
-            cv2.drawContours(image,c,-1,(255,255,0),1)
-        self.imageItem[self.selectedWindow].setImage(image.transpose(1,0,2),levels=[0,self.levelsMax[self.selectedWindow]])
+            c = mergedContours if sender is self.analysisMenuContoursFindContours else self.contourHulls
+            cv2.drawContours(image,c,-1,color,1,cv2.LINE_AA)
+        self.imageItem[self.selectedWindow].setImage(image.transpose((1,0,2)),levels=[0,255])
         
     def setMinContourVertices(self):
         n,ok = QtGui.QInputDialog.getInt(self.mainWin,'Select','Minimum number of contour vertices',self.minContourVertices,min=1)
@@ -2309,9 +2391,9 @@ class ImageGui():
             self.minContourVertices = n
             
     def setMergeContours(self):
-        source = self.mainWin.sender()
-        if source.isChecked():
-            if source is self.analysisMenuContoursMergeHorz:
+        sender = self.mainWin.sender()
+        if sender.isChecked():
+            if sender is self.analysisMenuContoursMergeHorz:
                 self.analysisMenuContoursMergeVert.setChecked(False)
             else:
                 self.analysisMenuContoursMergeHorz.setChecked(False)
@@ -2332,7 +2414,6 @@ class ImageObj():
     def __init__(self,filePath,fileType,chFileOrg,numCh,loadData,memmap,autoColor):
         self.data = None
         self.memmap = memmap
-        bits = None
         self.alpha = 1
         self.alphaMap = None
         self.pixelSize = [None]*3
@@ -2353,8 +2434,6 @@ class ImageObj():
             self.dtype,shape,numCh = getImageInfo(filePath)
             self.filePath = [[filePath]]*numCh
             self.shape = shape+(1,numCh)
-            if loadData: 
-                self.data = self.getData()
         elif fileType=='Image Series (*.tif *.btf *.png *.jpg *.jp2)':
             self.filePath = [[] for _ in range(numCh)]
             for ind,f in enumerate(filePath):
@@ -2382,8 +2461,6 @@ class ImageObj():
                     self.filePath[ch].append(f)
             numImg = len(filePath) if chFileOrg=='rgb' else int(len(filePath)/numCh)
             self.shape = shape+(numImg,numCh)
-            if loadData:
-                self.data = self.getData() 
         elif fileType=='Numpy Array (*.npy *.npz)':
             self.fileType = 'numpy'
             self.filePath = filePath
@@ -2401,15 +2478,11 @@ class ImageObj():
             if numCh==4:
                 numCh = 3
             self.shape = shape[:2]+(numImg,numCh)
-            if loadData:
-                self.data = self.getData()
         elif fileType=='Allen Atlas (*.nrrd)':
             self.fileType = 'atlas'
             self.filePath = filePath
             self.dtype = np.uint8
             self.shape = (320,456,528,1)
-            if loadData:
-                self.data = self.getData()
             self.pixelSize = [25.0]*3
         elif fileType in ('Bruker Dir (*.xml)','Bruker Dir + Siblings (*.xml)'):
             self.fileType = 'image'
@@ -2422,7 +2495,6 @@ class ImageObj():
             numCh = len(frames[0].getElementsByTagName('File'))
             self.filePath = [[] for _ in range(numCh)]
             self.dtype = np.uint16
-            bits = 12
             self.shape = (linesPerFrame,pixelsPerLine,numImg,numCh)
             zpos = []
             for frame in frames:
@@ -2430,8 +2502,6 @@ class ImageObj():
                 for ch,tifFile in enumerate(frame.getElementsByTagName('File')):
                     f = os.path.join(os.path.dirname(filePath),tifFile.getAttribute('filename'))
                     self.filePath[ch].append(f)
-            if loadData:
-                self.data = self.getData()
             self.pixelSize = [round(float(pvStateValues[9].getElementsByTagName('IndexedValue')[0].getAttribute('value')),4)]*2
             if len(frames)>1:
                 self.pixelSize.append(round(zpos[1]-zpos[0],4))
@@ -2440,14 +2510,15 @@ class ImageObj():
             xpos = float(pvStateValues[17].getElementsByTagName('SubindexedValue')[0].getAttribute('value'))
             ypos = float(pvStateValues[17].getElementsByTagName('SubindexedValue')[1].getAttribute('value'))
             self.position = [int(ypos/self.pixelSize[0]),int(xpos/self.pixelSize[1]),int(zpos[0]/self.pixelSize[2])]
-        if bits is None:
-            bits = 16 if self.dtype==np.uint16 else 8
-        self.levels = [[0,2**bits-1] for _ in range(self.shape[3])]
+        self.bitDepth = 16 if self.dtype==np.uint16 else 8
+        self.levels = [[0,2**self.bitDepth-1] for _ in range(self.shape[3])]
         self.gamma = [1]*self.shape[3]
         self.rgbInd = [(0,1,2) for _ in range(self.shape[3])]
         if autoColor:
             for ch in range(self.shape[3])[:3]:
                 self.rgbInd[ch] = (ch,)
+        if loadData and self.data is None:
+            self.data = self.getData()
             
     def getData(self,channels=None,rangeSlice=None):
         # returns array with shape height x width x n x channels
@@ -2510,11 +2581,11 @@ class ImageObj():
                     yield data[:,:,img,ch]
         
     def formatData(self,data):
-        if data.dtype not in (np.uint8,np.uint16):
+        if data.dtype!=self.dtype:
             data = data.astype(float)
-            data *= 255/np.nanmax(data)
+            data *= (2**self.bitDepth-1)/np.nanmax(data)
             data.round(out=data)
-            data = data.astype(np.uint8)
+            data = data.astype(self.dtype)
         if len(data.shape)<3:
             data = data[:,:,None,None]
         elif len(data.shape)<4:
@@ -2523,6 +2594,22 @@ class ImageObj():
             self.alphaMap = data[:,:,:,3]
             data = data[:,:,:,:3]
         return data
+        
+    def convertDtype(self):
+        if self.dtype==np.uint8:
+            dtype = np.uint16
+            bitDepth = 16
+        else:
+            dtype = np.uint8
+            bitDepth = 8
+        scaleFactor = (2**bitDepth-1)/(2**self.bitDepth-1)
+        self.data = self.data.astype(float)
+        self.data *= scaleFactor
+        self.data.round(out=self.data)
+        self.data = self.data.astype(dtype)
+        self.dtype = dtype
+        self.bitDepth = bitDepth
+        self.levels = [[int(round(level*scaleFactor)) for level in levels] for levels in self.levels]
             
     def flipX(self):
         if self.data is None:
@@ -2581,6 +2668,16 @@ def getImageData(filePath,memmap=False):
         if len(data.shape)>2:
             data = data[:,:,::-1]
     return data
+    
+def getDelauneyBoundaryPoints(w,h):
+    return [(0,0),(w/2,0),(w-1,0),(w-1,h/2),(w-1,h-1),(w/2,h-1),(0,h-1),(0,h/2)]
+    
+def getDelauneyTriangles(pts,w,h):
+    subdiv = cv2.Subdiv2D((0,0,w,h))
+    for p in pts:
+        subdiv.insert((p[0],p[1]))
+    triangles = subdiv.getTriangleList()
+    return triangles[np.all(triangles>=0,axis=1) & np.all(triangles[:,::2]<w,axis=1) & np.all(triangles[:,1::2]<h,axis=1)]
 
 def setLayoutGridSpacing(layout,height,width,rows,cols):
     for row in range(rows):
@@ -2595,7 +2692,7 @@ def getSelectedItemsIndex(listbox):
     for i in range(listbox.count()):
         if listbox.item(i).isSelected():
             selectedItemsIndex.append(i)
-    return selectedItemsIndex    
+    return selectedItemsIndex
 
 
 if __name__=="__main__":
