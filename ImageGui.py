@@ -109,9 +109,11 @@ class ImageGui():
         self.fileMenu.addAction(self.fileMenuOpen)
         
         self.fileMenuSave = self.fileMenu.addMenu('Save')
+        self.fileMenuSaveDisplay = QtGui.QAction('Display',self.mainWin)
+        self.fileMenuSaveDisplay.triggered.connect(self.saveImage)
         self.fileMenuSaveImage = QtGui.QAction('Image',self.mainWin)
         self.fileMenuSaveImage.triggered.connect(self.saveImage)
-        self.fileMenuSave.addAction(self.fileMenuSaveImage)
+        self.fileMenuSave.addActions([self.fileMenuSaveDisplay,self.fileMenuSaveImage])
         
         self.fileMenuSaveVolume = self.fileMenuSave.addMenu('Volume')
         self.fileMenuSaveVolumeImages = QtGui.QAction('Images',self.mainWin)
@@ -179,9 +181,13 @@ class ImageGui():
         self.imageMenuTransform.triggered.connect(self.transformImage)
         self.imageMenuWarp = QtGui.QAction('Warp',self.mainWin)
         self.imageMenuWarp.triggered.connect(self.warpImage)
-        self.imageMenuMakeCCF = QtGui.QAction('Make CCF Volume',self.mainWin)
-        self.imageMenuMakeCCF.triggered.connect(self.makeCCFVolume)
-        self.imageMenu.addActions([self.imageMenuRotate90,self.imageMenuTransform,self.imageMenuWarp,self.imageMenuMakeCCF])
+        self.imageMenu.addActions([self.imageMenuRotate90,self.imageMenuTransform,self.imageMenuWarp])
+        self.imageMenuMakeCCF = self.imageMenu.addMenu('Make CCF Volume')
+        self.imageMenuMakeCCFNoIntp = QtGui.QAction('No Interpolation',self.mainWin)
+        self.imageMenuMakeCCFNoIntp.triggered.connect(self.makeCCFVolume)
+        self.imageMenuMakeCCFIntp = QtGui.QAction('Interpolate Z',self.mainWin)
+        self.imageMenuMakeCCFIntp.triggered.connect(self.makeCCFVolume)
+        self.imageMenuMakeCCF.addActions([self.imageMenuMakeCCFNoIntp,self.imageMenuMakeCCFIntp])
         
         # analysis menu
         self.analysisMenu = self.menuBar.addMenu('Analysis')
@@ -603,7 +609,8 @@ class ImageGui():
             return
         self.fileSavePath = os.path.dirname(filePath)
         yRange,xRange = [self.imageRange[self.selectedWindow][axis] for axis in self.imageShapeIndex[self.selectedWindow][:2]]
-        cv2.imwrite(filePath,self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1,::-1])
+        image = self.imageItem[self.selectedWindow].image.transpose((1,0,2)) if self.mainWin.sender() is self.fileMenuSaveDisplay else self.getImage()
+        cv2.imwrite(filePath,image[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1,::-1])
         
     def saveVolume(self):
         sender = self.mainWin.sender()
@@ -635,7 +642,7 @@ class ImageGui():
             self.imageIndex[self.selectedWindow][axis] = imgInd
             img = self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1]
             if fileType in ('tif','png','jpg'):
-                cv2.imwrite(filePath[:-4]+'_'+str(i)+'.'+fileType,img[:,:,::-1])
+                cv2.imwrite(filePath[:-4]+'_'+str(i_1)+'.'+fileType,img[:,:,::-1])
             elif fileType=='avi':
                 vidOut.write(img)
             else:
@@ -769,7 +776,7 @@ class ImageGui():
                 editBox[0].setText(str(rng[0]+1))
                 editBox[1].setText(str(rng[1]+1))
         else:
-            self.imagePixelSizeLabel.setText('XYZ Dimensions: ')
+            self.imageDimensionsLabel.setText('XYZ Dimensions: ')
             for editBox in self.imageNumEditBoxes+tuple(box for boxes in self.rangeEditBoxes for box in boxes):
                 editBox.setText('')
         
@@ -847,7 +854,7 @@ class ImageGui():
         dtype = np.uint8 if sender is self.imageMenuConvertTo8Bit else np.uint16
         for fileInd in self.selectedFileIndex:
             if self.imageObjs[fileInd].dtype!=dtype:
-                self.imageObjs[fileInd].convertDtype()
+                self.imageObjs[fileInd].convertDataType()
         if self.selectedWindow in self.getAffectedWindows():
             self.updateLevelsRange()
             self.displayImageLevels()
@@ -1031,11 +1038,16 @@ class ImageGui():
         refShape = self.imageObjs[self.checkedFileIndex[refWin][0]].shape[:3]
         for fileInd in self.checkedFileIndex[self.selectedWindow]:
             data = self.imageObjs[fileInd].data[:,:,rng[0]:rng[1]+1]
-            x = np.arange(data.shape[2])
-            intp = scipy.interpolate.interp1d(x,data,axis=2)
-            alignInd = self.alignIndex[self.selectedWindow]>=0
             ccfData = np.zeros(refShape+(data.shape[3],),dtype=data.dtype)
-            ccfData[:,:,alignInd] = intp(np.linspace(x[0],x[-1],np.count_nonzero(alignInd)))
+            if self.mainWin.sender() is self.imageMenuMakeCCFIntp:
+                x = np.arange(data.shape[2])
+                intp = scipy.interpolate.interp1d(x,data,axis=2)
+                alignInd = self.alignIndex[self.selectedWindow]>=0
+                ccfData[:,:,alignInd] = intp(np.linspace(x[0],x[-1],np.count_nonzero(alignInd)))
+            else:
+                for i in range(rng[0],rng[1]+1):
+                    for ind in np.where(self.alignIndex[self.selectedWindow]==i)[0]:
+                        ccfData[:,:,ind] = data[:,:,i]
             self.imageObjs[fileInd].data = ccfData
             self.imageObjs[fileInd].shape = ccfData.shape
         self.imageIndex[self.selectedWindow][2] = np.where(self.alignIndex[self.selectedWindow]==rng[0])[0][0]
@@ -1173,11 +1185,10 @@ class ImageGui():
                         else:
                             image[i,j,k] = data[:,:,ind]
         if self.normState[window]:
-            image -= image.min()
-            image.clip(min=0,out=image)
-            imageMax = image.max()
-            if imageMax>0:
-                image *= self.levelsMax[window]/imageMax
+            levels = (image.min(),image.max())
+            image.clip(levels[0],levels[1],out=image)
+            image -= levels[0] 
+            image /= (levels[1]-levels[0])/self.levelsMax[window]
         dtype = np.uint8 if self.levelsMax[window]==255 or binary else np.uint16
         image = image.astype(dtype)
         for regionInd in self.selectedAtlasRegions[window]:
@@ -1201,7 +1212,7 @@ class ImageGui():
                     return None,None
             rangeSlice = slice(i,i+1)
         if imageObj.data is None:
-            data = np.zeros([imageObj.shape[i] for i in self.imageShapeIndex[window][:2]]+[len(channels)],dtype=np.uint8)
+            data = np.zeros([imageObj.shape[i] for i in self.imageShapeIndex[window][:2]]+[len(channels)],dtype=imageObj.dtype)
             zSlice = rangeSlice if axis==2 else slice(0,imageObj.shape[2])
             dataIter = imageObj.getDataIterator(channels,zSlice)
             for i in range(zSlice.start,zSlice.stop):
@@ -1232,11 +1243,11 @@ class ImageGui():
                 chData[aboveThresh] = 255
                 chData[~aboveThresh] = 0
             else:
-                if imageObj.levels[ch][0]>0 or imageObj.levels[ch][1]<self.levelsMax[window]:
+                levels = imageObj.levels[ch]
+                if levels[0]>0 or levels[1]<self.levelsMax[window]:
+                    chData.clip(levels[0],levels[1],out=chData)
                     chData -= imageObj.levels[ch][0] 
-                    chData.clip(min=0,out=chData)
-                    chData *= self.levelsMax[window]/(imageObj.levels[ch][1]-imageObj.levels[ch][0])
-                    chData.clip(max=self.levelsMax[window],out=chData)
+                    chData /= (levels[1]-levels[0])/self.levelsMax[window]
                 if imageObj.gamma[ch]!=1:
                     chData /= self.levelsMax[window]
                     chData **= imageObj.gamma[ch]
@@ -2406,7 +2417,7 @@ class ImageGui():
         image = self.getImage()
         for ind,r in enumerate(self.contourRectangles):
             r = [i*self.displayDownsample[self.selectedWindow] for i in r]
-            cv2.imwrite(filePath[:-4]+'_'+str(ind)+filePath[-4:],image[r[1]:r[1]+r[3],r[0]:r[0]+r[2],::-1])
+            cv2.imwrite(filePath[:-4]+'_'+str(ind+1)+filePath[-4:],image[r[1]:r[1]+r[3],r[0]:r[0]+r[2],::-1])
 
 
 class ImageObj():
@@ -2421,14 +2432,14 @@ class ImageObj():
         if isinstance(filePath,np.ndarray):
             self.fileType = 'data'
             self.filePath = None
-            self.dtype = np.uint16 if filePath.dtype==np.uint16 else np.uint8
-            shape = filePath.shape
+            self.data = filePath
+            self.dtype = np.uint16 if self.data.dtype==np.uint16 else np.uint8
+            shape = self.data.shape
             numImg = shape[2] if len(shape)>2 else 1
             numCh = shape[3] if len(shape)>3 else 1
             if numCh==4:
                 numCh = 3
             self.shape = shape[:2]+(numImg,numCh)
-            self.data = self.formatData(filePath)
         elif fileType=='Image (*.tif *.btf *.png *.jpg *.jp2)':
             self.fileType = 'bigtiff' if fileType[-4:]=='.btf' else 'image'
             self.dtype,shape,numCh = getImageInfo(filePath)
@@ -2517,8 +2528,11 @@ class ImageObj():
         if autoColor:
             for ch in range(self.shape[3])[:3]:
                 self.rgbInd[ch] = (ch,)
-        if loadData and self.data is None:
-            self.data = self.getData()
+        if self.data is None:
+            if loadData:
+                self.data = self.getData()
+        else:
+            self.data = self.formatData(self.data)
             
     def getData(self,channels=None,rangeSlice=None):
         # returns array with shape height x width x n x channels
@@ -2595,7 +2609,7 @@ class ImageObj():
             data = data[:,:,:,:3]
         return data
         
-    def convertDtype(self):
+    def convertDataType(self):
         if self.dtype==np.uint8:
             dtype = np.uint16
             bitDepth = 16
@@ -2650,7 +2664,7 @@ def getImageInfo(filePath):
             numCh = len(img.pages)
     else:
         img = PIL.Image.open(filePath)
-        dtype = np.uint16 if img.mode=='I;16' else np.uint8
+        dtype = np.uint16 if img.mode=='I;16' or img.decodermaxblock==2**16 else np.uint8
         shape = img.size[::-1]
         numCh = 3 if img.mode=='RGB' else 1
     img.close()
@@ -2668,6 +2682,20 @@ def getImageData(filePath,memmap=False):
         if len(data.shape)>2:
             data = data[:,:,::-1]
     return data
+    
+def applyLUT(data,levels,binary=False,gamma=1):
+    dtype,maxVal = (np.uint8,2**8-1) if binary or data.dtype==np.uint8 else (1**16-1,np.uint16)
+    if binary:
+        levels = [levels[1]-1,levels]
+    lut = np.arange(maxVal+1)
+    lut.clip(levels[0],levels[1],out=lut)
+    lut -= levels[0]
+    lut /= (levels[1]-levels[0])/maxVal
+    if gamma!=1 and not binary:
+        lut /= maxVal
+        lut **= gamma
+        lut *= maxVal
+    return np.take(lut.astype(dtype),data)
     
 def getDelauneyBoundaryPoints(w,h):
     return [(0,0),(w/2,0),(w-1,0),(w-1,h/2),(w-1,h-1),(w/2,h-1),(0,h-1),(0,h/2)]
