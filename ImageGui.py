@@ -75,7 +75,6 @@ class ImageGui():
         self.stitchState = [False]*self.numWindows
         self.stitchPos = np.full((self.numWindows,1,3),np.nan)
         self.holdStitchRange = [False]*self.numWindows
-        self.selectedAtlasRegions = [[] for _ in range(self.numWindows)]
         self.markedPoints = [None]*self.numWindows
         self.markPointsSize = 5
         self.markPointsColor = 'y'
@@ -85,6 +84,9 @@ class ImageGui():
         self.alignAxis = [None]*self.numWindows
         self.alignIndex = [None]*self.numWindows
         self.minContourVertices = 5
+        self.atlasAnnotationData = None
+        self.atlasAnnotationRegions = None
+        self.selectedAtlasRegionIDs = [[] for _ in range(self.numWindows)]
         
         # main window
         winHeight = 400
@@ -192,6 +194,17 @@ class ImageGui():
         # analysis menu
         self.analysisMenu = self.menuBar.addMenu('Analysis')
         self.analysisMenuPoints = self.analysisMenu.addMenu('Points')
+        
+        self.analysisMenuPointsLine = self.analysisMenuPoints.addMenu('Line')
+        self.analysisMenuPointsLineNone = QtGui.QAction('None',self.mainWin,checkable=True)
+        self.analysisMenuPointsLineNone.setChecked(True)
+        self.analysisMenuPointsLineNone.triggered.connect(self.setMarkedPointsLineStyle)
+        self.analysisMenuPointsLineLine = QtGui.QAction('Line',self.mainWin,checkable=True)
+        self.analysisMenuPointsLineLine.triggered.connect(self.setMarkedPointsLineStyle)
+        self.analysisMenuPointsLinePoly = QtGui.QAction('Polygon',self.mainWin,checkable=True)
+        self.analysisMenuPointsLinePoly.triggered.connect(self.setMarkedPointsLineStyle)
+        self.analysisMenuPointsLine.addActions([self.analysisMenuPointsLineNone,self.analysisMenuPointsLineLine,self.analysisMenuPointsLinePoly])
+        
         self.analysisMenuPointsDraw = self.analysisMenuPoints.addMenu('Draw')
         self.analysisMenuPointsDrawLine = QtGui.QAction('Line',self.mainWin)
         self.analysisMenuPointsDrawPoly = QtGui.QAction('Polygon',self.mainWin)
@@ -248,9 +261,7 @@ class ImageGui():
         # atlas menu
         self.atlasMenu = self.menuBar.addMenu('Atlas')
         self.atlasMenuSelect = self.atlasMenu.addMenu('Select Regions')
-        self.atlasAnnotationData = None
-        self.atlasRegionLabels = ('SCs','LGd','LGv','LP','LD','VISal','VISam','VISl','VISp','VISpl','VISpm','VISli','VISpor')
-        self.atlasRegionIDs = ((834,842,851),170,178,218,155,(1074,905,1114,233,601,649),(281,1066,401,433,1046,441),(421,973,573,613,74,121),(593,821,721,778,33,305),(750,269,869,902,377,393),(805,41,501,565,257,469),(312782578,312782582,312782586,312782590,312782594,312782598),(312782632,312782636,312782640,312782644,312782648,312782652))
+        self.atlasRegionLabels = ('SCs','LGd','LGv','LP','LD','VISal','VISam','VISl','VISp','VISpl','VISpm','VISli','VISpor','ACA')
         self.atlasRegionMenu = []
         for region in self.atlasRegionLabels:
             self.atlasRegionMenu.append(QtGui.QAction(region,self.mainWin,checkable=True))
@@ -751,7 +762,7 @@ class ImageGui():
         self.normState[window] = False
         self.showBinaryState[window] = False
         self.stitchState[window] = False
-        self.selectedAtlasRegions[window] = []
+        self.selectedAtlasRegionIDs[window] = []
         self.displayedWindows.remove(window)
         self.imageItem[window].setImage(np.zeros((2,2,3),dtype=np.uint8),levels=[0,255])
         self.imageViewBox[window].setMouseEnabled(x=False,y=False)
@@ -978,9 +989,8 @@ class ImageGui():
                         self.imageIndex[window][axis] = imgInd
                     image = self.getImage(window,binary=True).max(axis=2)
                     _,contours,_ = cv2.findContours(image,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-                    contourIndex = np.argmax([c.shape[0] for c in contours])
                     mask.append(np.zeros(image.shape,dtype=np.uint8))
-                    cv2.drawContours(mask[-1],contours,contourIndex,1,-1)                    
+                    cv2.drawContours(mask[-1],contours,-1,1,-1)                    
                 _,warpMatrix = cv2.findTransformECC(mask[0],mask[1],np.eye(2,3,dtype=np.float32),cv2.MOTION_AFFINE)
                 for ch in range(warpData.shape[3]):
                     warpData[:,:,ind,ch] = cv2.warpAffine(next(dataIter),warpMatrix,warpShape[1::-1],flags=cv2.INTER_LINEAR+cv2.WARP_INVERSE_MAP)
@@ -1201,8 +1211,8 @@ class ImageGui():
             image /= (levels[1]-levels[0])/self.levelsMax[window]
         dtype = np.uint8 if self.levelsMax[window]==255 or binary else np.uint16
         image = image.astype(dtype)
-        for regionInd in self.selectedAtlasRegions[window]:
-            _,contours,_ = cv2.findContours(self.getAtlasRegion(window,self.atlasRegionIDs[regionInd],downsample).copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+        for regionID in self.selectedAtlasRegionIDs[window]:
+            _,contours,_ = cv2.findContours(self.getAtlasRegionMask(window,regionID,downsample).copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(image,contours,-1,(self.levelsMax[window],)*3,1,cv2.LINE_AA)
         return image
                     
@@ -1277,7 +1287,7 @@ class ImageGui():
             data *= imageObj.alpha
         return data,alphaMap
         
-    def getAtlasRegion(self,window,region,downsample=1):
+    def getAtlasRegionMask(self,window,regionID,downsample=1):
         isProj = self.sliceProjState[window]
         axis = self.imageShapeIndex[window][2]
         if isProj:
@@ -1295,38 +1305,50 @@ class ImageGui():
             a = self.atlasAnnotationData[:,ind,:]
         else:
             a = self.atlasAnnotationData.transpose((0,2,1))[ind,:,:]
-        a = np.in1d(a,region).reshape(a.shape)
+        a = np.in1d(a,regionID).reshape(a.shape)
         if isProj:
             a = a.max(axis=axis)
         return a[::downsample,::downsample]
         
+    def getAtlasRegionID(self,regionLabel):
+        for structure in self.atlasAnnotationRegions.getElementsByTagName('structure'):
+            if structure.childNodes[7].childNodes[0].nodeValue[1:-1]==regionLabel:
+                return [int(sub.childNodes[0].nodeValue) for sub in structure.getElementsByTagName('id')]
+        return []
+        
     def setAtlasRegions(self):
         if self.atlasAnnotationData is None:
-            filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose Annotation File',self.fileOpenPath,'*.nrrd')
+            filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose Annotation Data File',self.fileOpenPath,'*.nrrd')
             if filePath=='':
-                for region in self.atlasRegionMenu:
-                    if region.isChecked():
-                        region.setChecked(False)
+                self.resetAtlasRegionMenu()
                 return
-            self.fileSavePath = os.path.dirname(filePath)
+            self.fileOpenPath = os.path.dirname(filePath)
             self.atlasAnnotationData,_ = nrrd.read(filePath)
             self.atlasAnnotationData = self.atlasAnnotationData.transpose((1,2,0))
+        if self.atlasAnnotationRegions is None:
+            filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose Annotation Region Hierarchy File',self.fileOpenPath,'*.xml')
+            if filePath=='':
+                self.resetAtlasRegionMenu()
+                return
+            self.fileOpenPath = os.path.dirname(filePath)
+            self.atlasAnnotationRegions = minidom.parse(filePath)
+        regionIDs = [self.getAtlasRegionID(self.atlasRegionLabels[ind]) for ind,region in enumerate(self.atlasRegionMenu) if region.isChecked()]
         windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
         for window in windows:
-            self.selectedAtlasRegions[window] = []
-            for ind,region in enumerate(self.atlasRegionMenu):
-                if region.isChecked():
-                    self.selectedAtlasRegions[window].append(ind)
+            self.selectedAtlasRegionIDs[window] = regionIDs
         self.displayImage(windows)
         
+    def resetAtlasRegionMenu(self):
+        for region in self.atlasRegionMenu:
+            if region.isChecked():
+                region.setChecked(False)
+        
     def clearAtlasRegions(self,updateImage=True):
-        if len(self.selectedAtlasRegions[self.selectedWindow])>0:
-            for region in self.atlasRegionMenu:
-                if region.isChecked():
-                    region.setChecked(False)
+        if len(self.selectedAtlasRegionIDs[self.selectedWindow])>0:
+            self.resetAtlasRegionMenu()
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
             for window in windows:
-                self.selectedAtlasRegions[window] = []
+                self.selectedAtlasRegionIDs[window] = []
             if updateImage or self.mainWin.sender() is not None:
                 self.displayImage(windows)
         
@@ -1357,7 +1379,7 @@ class ImageGui():
                     pts = self.markedPoints[self.selectedWindow][rows]
                     shape = tuple(self.imageShape[self.selectedWindow][i] for i in self.imageShapeIndex[self.selectedWindow][:2])
                     mask = np.zeros(shape,dtype=np.uint8)
-                    cv2.fillConvexPoly(mask,pts.astype(int)[:,self.imageShapeIndex[self.selectedWindow][1::-1]],1)
+                    cv2.fillConvexPoly(mask,pts.astype(int)[:,self.imageShapeIndex[self.selectedWindow][1::-1]],255)
                     moveAxis,dist = self.getMoveParams(self.selectedWindow,key,modifiers,True)
                     if key in (16777237,16777235,16777234,16777236):
                         if dist<0:
@@ -1717,7 +1739,7 @@ class ImageGui():
         self.showBinaryCheckbox.setChecked(self.showBinaryState[window])
         self.stitchCheckbox.setChecked(self.stitchState[window])
         for ind,region in enumerate(self.atlasRegionMenu):
-            region.setChecked(ind in self.selectedAtlasRegions[window])
+            region.setChecked(ind in self.selectedAtlasRegionIDs[window])
         self.clearPointsTable()
         self.fillPointsTable()
         self.selectedPoint = None
@@ -1917,7 +1939,7 @@ class ImageGui():
             self.normState[window] = self.normState[self.selectedWindow]
             self.showBinaryState[window] = self.showBinaryState[self.selectedWindow]
             self.stitchState[window] = self.stitchState[self.selectedWindow]
-            self.selectedAtlasRegions[window] = self.selectedAtlasRegions[self.selectedWindow]
+            self.selectedAtlasRegionIDs[window] = self.selectedAtlasRegionIDs[self.selectedWindow]
             self.markedPoints[window] = self.markedPoints[self.selectedWindow]
         if self.stitchState[self.selectedWindow]:
             self.stitchPos[:numWindows] = self.stitchPos[self.selectedWindow]
@@ -2218,9 +2240,13 @@ class ImageGui():
                 rows = np.logical_and(self.markedPoints[window][:,axis]>=rng[0],self.markedPoints[window][:,axis]<=rng[1])
                 if any(rows):
                     y,x = self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]].T
+                    if self.analysisMenuPointsLinePoly.isChecked():
+                        x = np.append(x,x[0])
+                        y = np.append(y,y[0])
                 else:
                     x = y = []
-            self.markPointsPlot[window].setData(x=x,y=y,symbolSize=self.markPointsSize,symbolPen=self.markPointsColor)
+            pen = None if self.analysisMenuPointsLineNone.isChecked() else self.markPointsColor
+            self.markPointsPlot[window].setData(x=x,y=y,pen=pen,symbolSize=self.markPointsSize,symbolPen=self.markPointsColor)
         
     def fillPointsTable(self,append=False):
         if self.markedPoints[self.selectedWindow] is not None:
@@ -2280,6 +2306,12 @@ class ImageGui():
     def increasePointSizeButtonCallback(self):
         self.markPointsSize += 1
         self.plotMarkedPoints(self.displayedWindows)
+        
+    def setMarkedPointsLineStyle(self):
+        sender = self.mainWin.sender()
+        for option in (self.analysisMenuPointsLineNone,self.analysisMenuPointsLineLine,self.analysisMenuPointsLinePoly):
+            option.setChecked(option is sender)
+        self.plotMarkedPoints()
         
     def drawDelauneyTriangles(self):
         shapeIndex = self.imageShapeIndex[self.selectedWindow]
