@@ -94,7 +94,6 @@ class ImageGui():
         self.mainWin = QtGui.QMainWindow()
         self.mainWin.setWindowTitle('ImageGUI')
         self.mainWin.closeEvent = self.mainWinCloseCallback
-        self.mainWin.resizeEvent = self.mainWinResizeCallback
         self.mainWin.keyPressEvent = self.mainWinKeyPressCallback
         self.mainWin.resize(winWidth,winHeight)
         screenCenter = QtGui.QDesktopWidget().availableGeometry().center()
@@ -274,6 +273,8 @@ class ImageGui():
         
         # image windows
         self.imageLayout = pg.GraphicsLayoutWidget()
+        self.imageLayoutResizeFcn = self.imageLayout.resizeEvent
+        self.imageLayout.resizeEvent = self.imageLayoutResizeCallback
         self.imageViewBox = [pg.ViewBox(invertY=True,enableMouse=False,enableMenu=False) for _ in range(self.numWindows)]
         self.imageItem = [pg.ImageItem() for _ in range(self.numWindows)]
         self.markPointsPlot = [pg.PlotDataItem(x=[],y=[],symbol='o',symbolBrush=None,pen=None) for _ in range(self.numWindows)]
@@ -618,10 +619,6 @@ class ImageGui():
     def mainWinCloseCallback(self,event):
         event.accept()
         
-    def mainWinResizeCallback(self,event):
-        if len(self.displayedWindows)>0:
-            self.setViewBoxRange(self.displayedWindows)
-        
     def saveImage(self):
         filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'Image (*.tif  *png *.jpg)')
         if filePath=='':
@@ -661,7 +658,7 @@ class ImageGui():
             self.imageIndex[self.selectedWindow][axis] = imgInd
             img = self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1]
             if fileType in ('tif','png','jpg'):
-                cv2.imwrite(filePath[:-4]+'_'+str(i_1)+'.'+fileType,img[:,:,::-1])
+                cv2.imwrite(filePath[:-4]+'_'+str(i+1)+'.'+fileType,img[:,:,::-1])
             elif fileType=='avi':
                 vidOut.write(img)
             else:
@@ -1149,6 +1146,11 @@ class ImageGui():
             self.imageViewBox[window].setRange(xRange=xRange,yRange=yRange,padding=0)
         self.ignoreImageRangeChange = False
         
+    def imageLayoutResizeCallback(self,event):
+        self.imageLayoutResizeFcn(event)
+        if len(self.displayedWindows)>0:
+            self.setViewBoxRange(self.displayedWindows)
+        
     def downsampleEditCallback(self):
         val = int(self.downsampleEdit.text())
         if val<1:
@@ -1355,15 +1357,19 @@ class ImageGui():
     def mainWinKeyPressCallback(self,event):
         key = event.key()
         modifiers = self.app.keyboardModifiers()
-        if key in (44,46) and self.sliceButton.isChecked() and not self.view3dCheckbox.isChecked():
-            axis = self.imageShapeIndex[self.selectedWindow][2]
-            imgInd = self.imageIndex[self.selectedWindow][axis]
-            if key==44: # <
-                self.setImageNum(axis,imgInd-1)
-            else: # >
-                self.setImageNum(axis,imgInd+1)
+        moveKeys = (QtCore.Qt.Key_Down,QtCore.Qt.Key_Up,QtCore.Qt.Key_Left,QtCore.Qt.Key_Right,QtCore.Qt.Key_Minus,QtCore.Qt.Key_Equal)
+        if key==QtCore.Qt.Key_W:
+            self.setViewBoxRange(self.displayedWindows)
+        elif key in (QtCore.Qt.Key_Comma,QtCore.Qt.Key_Period):
+            if self.sliceButton.isChecked() and not self.view3dCheckbox.isChecked():
+                axis = self.imageShapeIndex[self.selectedWindow][2]
+                imgInd = self.imageIndex[self.selectedWindow][axis]
+                if key==44: # <
+                    self.setImageNum(axis,imgInd-1)
+                else: # >
+                    self.setImageNum(axis,imgInd+1)
         elif self.stitchCheckbox.isChecked():
-            if key in (16777237,16777235,16777234,16777236,45,61):
+            if key in moveKeys:
                 windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
                 fileInd = list(set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex))
                 moveAxis,moveDist = self.getMoveParams(self.selectedWindow,key,modifiers)
@@ -1371,7 +1377,7 @@ class ImageGui():
                 self.updateStitchShape(windows)
                 self.displayImage(windows)
         elif int(modifiers & QtCore.Qt.AltModifier)>0:
-            if key in (16777237,16777235,16777234,16777236,45,61):
+            if key in (QtCore.Qt.Key_0,QtCore.Qt.Key_1)+moveKeys:
                 axis = self.imageShapeIndex[self.selectedWindow][2]
                 imgInd = self.imageIndex[self.selectedWindow][axis]
                 rows = np.where(self.markedPoints[self.selectedWindow][:,axis]==imgInd)[0]
@@ -1380,22 +1386,9 @@ class ImageGui():
                     shape = tuple(self.imageShape[self.selectedWindow][i] for i in self.imageShapeIndex[self.selectedWindow][:2])
                     mask = np.zeros(shape,dtype=np.uint8)
                     cv2.fillConvexPoly(mask,pts.astype(int)[:,self.imageShapeIndex[self.selectedWindow][1::-1]],255)
-                    moveAxis,dist = self.getMoveParams(self.selectedWindow,key,modifiers,True)
-                    if key in (16777237,16777235,16777234,16777236):
-                        if dist<0:
-                            minPt = int(pts[:,moveAxis].min())
-                            if minPt==0:
-                                return
-                            elif minPt+dist<0:
-                                dist = -minPt
-                        else:
-                            maxPt = int(pts[:,moveAxis].max())
-                            if maxPt==shape[moveAxis]-1:
-                                return
-                            elif maxPt+dist>=shape[moveAxis]:
-                                dist = shape[moveAxis]-1-maxPt
+                    if key in (QtCore.Qt.Key_0,QtCore.Qt.Key_1):
                         mask = mask.astype(bool)
-                        shiftMask = np.roll(mask,dist,moveAxis)
+                        val = 0 if key==QtCore.Qt.Key_0 else self.levelsMax[self.selectedWindow]
                         for fileInd in self.checkedFileIndex[self.selectedWindow]:
                             for ch in range(self.imageObjs[fileInd].shape[3]):
                                 if axis==2:
@@ -1404,68 +1397,95 @@ class ImageGui():
                                     data = self.imageObjs[fileInd].data[:,imgInd,:,ch]
                                 else:
                                     data = self.imageObjs[fileInd].data[imgInd,:,:,ch]
-                                shiftData = data[mask].copy()
-                                data[mask] = 0
-                                data[shiftMask] = shiftData
-                        self.markedPoints[self.selectedWindow][rows,moveAxis] += dist
-                        cols = [moveAxis]
+                                data[mask] = val
                     else:
-                        rotMat = cv2.getRotationMatrix2D(tuple(s//2 for s in shape[::-1]),-dist/10,1)
-                        rotMask = cv2.warpAffine(mask,rotMat,shape[1::-1])
-                        mask = mask.astype(bool)
-                        rotMask = rotMask.astype(bool)
-                        for fileInd in self.checkedFileIndex[self.selectedWindow]:
-                            for ch in range(self.imageObjs[fileInd].shape[3]):
-                                if axis==2:
-                                    data = self.imageObjs[fileInd].data[:,:,imgInd,ch]
-                                elif axis==1:
-                                    data = self.imageObjs[fileInd].data[:,imgInd,:,ch]
-                                else:
-                                    data = self.imageObjs[fileInd].data[imgInd,:,:,ch]
-                                rotData = cv2.warpAffine(data,rotMat,shape[::-1])
-                                data[mask] = 0
-                                data[rotMask] = rotData[rotMask]
-                        rotMat[[0,1],[1,0]] *= -1
-                        rotMat[:,2] = rotMat[::-1,2]
-                        cols = self.imageShapeIndex[self.selectedWindow][:2]
-                        self.markedPoints[self.selectedWindow][rows[:,None],cols] = cv2.transform(pts[:,cols][:,None,:],rotMat).squeeze()
-                    for row in rows:
-                        for col in cols:
-                            ind = col if col==2 else int(not col)
-                            self.markPointsTable.item(row,ind).setText(str(self.markedPoints[self.selectedWindow][row,col]+1))
+                        moveAxis,dist = self.getMoveParams(self.selectedWindow,key,modifiers,True)
+                        if key in moveKeys[:4]:
+                            if dist<0:
+                                minPt = int(pts[:,moveAxis].min())
+                                if minPt==0:
+                                    return
+                                elif minPt+dist<0:
+                                    dist = -minPt
+                            else:
+                                maxPt = int(pts[:,moveAxis].max())
+                                if maxPt==shape[moveAxis]-1:
+                                    return
+                                elif maxPt+dist>=shape[moveAxis]:
+                                    dist = shape[moveAxis]-1-maxPt
+                            mask = mask.astype(bool)
+                            shiftMask = np.roll(mask,dist,moveAxis)
+                            for fileInd in self.checkedFileIndex[self.selectedWindow]:
+                                for ch in range(self.imageObjs[fileInd].shape[3]):
+                                    if axis==2:
+                                        data = self.imageObjs[fileInd].data[:,:,imgInd,ch]
+                                    elif axis==1:
+                                        data = self.imageObjs[fileInd].data[:,imgInd,:,ch]
+                                    else:
+                                        data = self.imageObjs[fileInd].data[imgInd,:,:,ch]
+                                    shiftData = data[mask].copy()
+                                    data[mask] = 0
+                                    data[shiftMask] = shiftData
+                            self.markedPoints[self.selectedWindow][rows,moveAxis] += dist
+                            cols = [moveAxis]
+                        else:
+                            rotMat = cv2.getRotationMatrix2D(tuple(s//2 for s in shape[::-1]),-dist/10,1)
+                            rotMask = cv2.warpAffine(mask,rotMat,shape[1::-1])
+                            mask = mask.astype(bool)
+                            rotMask = rotMask.astype(bool)
+                            for fileInd in self.checkedFileIndex[self.selectedWindow]:
+                                for ch in range(self.imageObjs[fileInd].shape[3]):
+                                    if axis==2:
+                                        data = self.imageObjs[fileInd].data[:,:,imgInd,ch]
+                                    elif axis==1:
+                                        data = self.imageObjs[fileInd].data[:,imgInd,:,ch]
+                                    else:
+                                        data = self.imageObjs[fileInd].data[imgInd,:,:,ch]
+                                    rotData = cv2.warpAffine(data,rotMat,shape[::-1])
+                                    data[mask] = 0
+                                    data[rotMask] = rotData[rotMask]
+                            rotMat[[0,1],[1,0]] *= -1
+                            rotMat[:,2] = rotMat[::-1,2]
+                            cols = self.imageShapeIndex[self.selectedWindow][:2]
+                            self.markedPoints[self.selectedWindow][rows[:,None],cols] = cv2.transform(pts[:,cols][:,None,:],rotMat).squeeze()
+                        for row in rows:
+                            for col in cols:
+                                ind = col if col==2 else int(not col)
+                                self.markPointsTable.item(row,ind).setText(str(self.markedPoints[self.selectedWindow][row,col]+1))
                     self.displayImage()
-        elif self.selectedPoint is not None and key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace,16777237,16777235,16777234,16777236):
-            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
-            for window in windows:
-                imgAxis = self.imageShapeIndex[window][2]
-                if self.markedPoints[window][self.selectedPoint,imgAxis]==self.imageIndex[window][imgAxis]:
-                    if key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace):
-                        if int(modifiers & QtCore.Qt.ControlModifier)>0 or self.markedPoints[window].shape[0]<2:
-                            self.clearMarkedPoints()
+        elif self.selectedPoint is not None:
+            if key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace)+moveKeys[:4]:
+                windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+                for window in windows:
+                    imgAxis = self.imageShapeIndex[window][2]
+                    if self.markedPoints[window][self.selectedPoint,imgAxis]==self.imageIndex[window][imgAxis]:
+                        if key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace):
+                            if int(modifiers & QtCore.Qt.ControlModifier)>0 or self.markedPoints[window].shape[0]<2:
+                                self.clearMarkedPoints()
+                            else:
+                                self.deleteSelectedPoint()
+                            return
                         else:
-                            self.deleteSelectedPoint()
-                        return
-                    else:
-                        moveAxis,moveDist = self.getMoveParams(window,key,modifiers,True)
-                        point = self.markedPoints[window][self.selectedPoint]
-                        point[moveAxis] += moveDist
-                        rng = self.imageRange[window][moveAxis]
-                        if point[moveAxis]<rng[0]:
-                            point[moveAxis] = rng[0]
-                        elif point[moveAxis]>rng[1]:
-                            point[moveAxis] = rng[1]
-                        if window==self.selectedWindow:
-                            ind = 2 if moveAxis==2 else int(not moveAxis)
-                            self.markPointsTable.item(self.selectedPoint,ind).setText(str(point[moveAxis]+1))
-                        self.plotMarkedPoints([window])
+                            moveAxis,moveDist = self.getMoveParams(window,key,modifiers,True)
+                            point = self.markedPoints[window][self.selectedPoint]
+                            point[moveAxis] += moveDist
+                            rng = self.imageRange[window][moveAxis]
+                            if point[moveAxis]<rng[0]:
+                                point[moveAxis] = rng[0]
+                            elif point[moveAxis]>rng[1]:
+                                point[moveAxis] = rng[1]
+                            if window==self.selectedWindow:
+                                ind = 2 if moveAxis==2 else int(not moveAxis)
+                                self.markPointsTable.item(self.selectedPoint,ind).setText(str(point[moveAxis]+1))
+                            self.plotMarkedPoints([window])
                     
     def getMoveParams(self,window,key,modifiers,flipVert=False):
-        down,up = 16777237,16777235
+        down,up = QtCore.Qt.Key_Down,QtCore.Qt.Key_Up
         if flipVert:
             up,down = down,up
         if key in (down,up):
             axis = self.imageShapeIndex[window][0]
-        elif key in (16777234,16777236): # left,right
+        elif key in (QtCore.Qt.Key_Left,QtCore.Qt.Key_Right):
             axis = self.imageShapeIndex[window][1]
         else: # minus,plus
             axis = self.imageShapeIndex[window][2]
@@ -1475,7 +1495,7 @@ class ImageGui():
             dist = 10
         else:
             dist = 1
-        if key in (down,16777234,45):
+        if key in (down,QtCore.Qt.Key_Left,QtCore.Qt.Key_Minus):
             dist *= -1
         return axis,dist
             
@@ -2006,15 +2026,10 @@ class ImageGui():
             self.imageViewBox[window].setMouseEnabled(x=isOn,y=isOn)
         
     def resetViewButtonCallback(self):
-        isDisplayed = len(self.checkedFileIndex[self.selectedWindow])>0
-        for axis,editBoxes in enumerate(self.rangeEditBoxes):
-            if isDisplayed:
+        if self.selectedWindow in self.displayedWindows:
+            for axis,editBoxes in enumerate(self.rangeEditBoxes):
                 editBoxes[0].setText('1')
                 editBoxes[1].setText(str(self.imageShape[self.selectedWindow][axis]))
-            else:
-                for box in editBoxes:
-                    box.setText('')
-        if isDisplayed:
             self.setImageRange()
         
     def rangeEditCallback(self):
