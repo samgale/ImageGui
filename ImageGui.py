@@ -2604,7 +2604,7 @@ class ImageObj():
                 z = zipfile.ZipFile(filePath)
                 npy = z.open(z.namelist()[0])
             else:
-                npy = open(filePath)
+                npy = open(filePath,'rb')
             version = np.lib.format.read_magic(npy)
             shape,fortran,dtype = np.lib.format._read_array_header(npy,version)
             npy.close()
