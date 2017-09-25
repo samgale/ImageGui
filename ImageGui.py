@@ -251,25 +251,30 @@ class ImageGui():
         self.analysisMenuContoursMergeVert.triggered.connect(self.setMergeContours)
         self.analysisMenuContoursMerge.addActions([self.analysisMenuContoursMergeHorz,self.analysisMenuContoursMergeVert])
         
+        self.analysisMenuContoursFill = QtGui.QAction('Show Filled',self.mainWin,checkable=True)
         self.analysisMenuContoursMinVertices = QtGui.QAction('Minimum Vertices',self.mainWin)
         self.analysisMenuContoursMinVertices.triggered.connect(self.setMinContourVertices)
         self.analysisMenuContoursSave = QtGui.QAction('Save ROIs as Images',self.mainWin)
         self.analysisMenuContoursSave.triggered.connect(self.saveContours)
-        self.analysisMenuContours.addActions([self.analysisMenuContoursMinVertices,self.analysisMenuContoursSave])
+        self.analysisMenuContours.addActions([self.analysisMenuContoursFill,self.analysisMenuContoursMinVertices,self.analysisMenuContoursSave])
         
         # atlas menu
         self.atlasMenu = self.menuBar.addMenu('Atlas')
         self.atlasMenuSelect = self.atlasMenu.addMenu('Select Regions')
-        self.atlasRegionLabels = ('SCs','LGd','LGv','LP','LD','VISal','VISam','VISl','VISp','VISpl','VISpm','VISli','VISpor','ACA')
+        self.atlasRegionLabels = ('SCs','LGd','LGv','LP','LD','VISal','VISam','VISl','VISp','VISpl','VISpm','VISli','VISpor','ACA','LA','BLA')
         self.atlasRegionMenu = []
         for region in self.atlasRegionLabels:
             self.atlasRegionMenu.append(QtGui.QAction(region,self.mainWin,checkable=True))
             self.atlasRegionMenu[-1].triggered.connect(self.setAtlasRegions)
         self.atlasMenuSelect.addActions(self.atlasRegionMenu)
         
+        self.atlasMenuNorm = QtGui.QAction('Normalize Region Levels',self.mainWin)
+        self.atlasMenuNorm.triggered.connect(self.normRegionLevels)
+        self.atlasMenuZero = QtGui.QAction('Set Zero Outside Region',self.mainWin)
+        self.atlasMenuZero.triggered.connect(self.setOutsideRegionZero)
         self.atlasMenuClear = QtGui.QAction('Clear All',self.mainWin)
         self.atlasMenuClear.triggered.connect(self.clearAtlasRegions)
-        self.atlasMenu.addAction(self.atlasMenuClear)
+        self.atlasMenu.addActions([self.atlasMenuNorm,self.atlasMenuZero,self.atlasMenuClear])
         
         # image windows
         self.imageLayout = pg.GraphicsLayoutWidget()
@@ -1353,6 +1358,25 @@ class ImageGui():
                 self.selectedAtlasRegionIDs[window] = []
             if updateImage or self.mainWin.sender() is not None:
                 self.displayImage(windows)
+                
+    def normRegionLevels(self):
+        if len(self.selectedAtlasRegionIDs[self.selectedWindow])>0:
+            a = np.in1d(self.atlasAnnotationData,self.selectedAtlasRegionIDs[self.selectedWindow][0]).reshape(self.atlasAnnotationData.shape)
+            for fileInd in set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex):
+                for ch in range(self.imageObjs[fileInd].shape[3]):
+                    self.imageObjs[fileInd].levels[ch][1] = self.imageObjs[fileInd].data[:,:,:,ch][a].max()
+            self.displayImageLevels()
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+            self.displayImage(windows)
+        
+    def setOutsideRegionZero(self):
+        if len(self.selectedAtlasRegionIDs[self.selectedWindow])>0:
+            a = np.logical_not(np.in1d(self.atlasAnnotationData,self.selectedAtlasRegionIDs[self.selectedWindow][0]).reshape(self.atlasAnnotationData.shape))
+            for fileInd in set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex):
+                for ch in range(self.imageObjs[fileInd].shape[3]):
+                    self.imageObjs[fileInd].data[:,:,:,ch][a] = 0
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+            self.displayImage(windows)
         
     def mainWinKeyPressCallback(self,event):
         key = event.key()
@@ -1385,9 +1409,11 @@ class ImageGui():
                     pts = self.markedPoints[self.selectedWindow][rows]
                     shape = tuple(self.imageShape[self.selectedWindow][i] for i in self.imageShapeIndex[self.selectedWindow][:2])
                     mask = np.zeros(shape,dtype=np.uint8)
-                    cv2.fillConvexPoly(mask,pts.astype(int)[:,self.imageShapeIndex[self.selectedWindow][1::-1]],255)
+                    cv2.fillPoly(mask,[pts.astype(int)[:,self.imageShapeIndex[self.selectedWindow][1::-1]]],255)               
                     if key in (QtCore.Qt.Key_0,QtCore.Qt.Key_1):
                         mask = mask.astype(bool)
+                        if int(modifiers & QtCore.Qt.ControlModifier)>0:
+                            mask = np.logical_not(mask,out=mask)
                         val = 0 if key==QtCore.Qt.Key_0 else self.levelsMax[self.selectedWindow]
                         for fileInd in self.checkedFileIndex[self.selectedWindow]:
                             for ch in range(self.imageObjs[fileInd].shape[3]):
@@ -2512,13 +2538,14 @@ class ImageGui():
             x,y,w,h = cv2.boundingRect(m)
             self.contourRectangles.append([x-1,y-1,w+2,h+2])
         color = (255,255,0)
+        lineWidth = -1 if self.analysisMenuContoursFill.isChecked() else 1
         sender = self.mainWin.sender()
         if sender is self.analysisMenuContoursFindRectangle:
             for r in self.contourRectangles:
-                cv2.rectangle(image,(r[0],r[1]),(r[0]+r[2],r[1]+r[3]),color,1,cv2.LINE_AA)
+                cv2.rectangle(image,(r[0],r[1]),(r[0]+r[2],r[1]+r[3]),color,lineWidth,cv2.LINE_AA)
         else:
             c = mergedContours if sender is self.analysisMenuContoursFindContours else self.contourHulls
-            cv2.drawContours(image,c,-1,color,1,cv2.LINE_AA)
+            cv2.drawContours(image,c,-1,color,lineWidth,cv2.LINE_AA)
         self.imageItem[self.selectedWindow].setImage(image.transpose((1,0,2)),levels=[0,255])
         
     def setMinContourVertices(self):
