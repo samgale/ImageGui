@@ -167,28 +167,35 @@ class ImageGui():
         self.imageMenuResample.addActions([self.imageMenuResamplePixelSize,self.imageMenuResampleScaleFactor])
         
         self.imageMenuFlip = self.imageMenu.addMenu('Flip')
-        self.imageMenuFlipX = QtGui.QAction('X',self.mainWin)
-        self.imageMenuFlipX.triggered.connect(self.flipImage)
-        self.imageMenuFlipY = QtGui.QAction('Y',self.mainWin)
-        self.imageMenuFlipY.triggered.connect(self.flipImage)
-        self.imageMenuFlipZ = QtGui.QAction('Z',self.mainWin)
-        self.imageMenuFlipZ.triggered.connect(self.flipImage)
-        self.flipOptions = (self.imageMenuFlipX,self.imageMenuFlipY,self.imageMenuFlipZ)
-        self.imageMenuFlip.addActions(self.flipOptions)
+        self.imageMenuFlipImg = self.imageMenuFlip.addMenu('Image')
+        self.imageMenuFlipImgHorz = QtGui.QAction('Horizontal',self.mainWin)
+        self.imageMenuFlipImgHorz.triggered.connect(self.flipImage)
+        self.imageMenuFlipImgVert = QtGui.QAction('Vertical',self.mainWin)
+        self.imageMenuFlipImgVert.triggered.connect(self.flipImage)
+        self.imageMenuFlipImg.addActions([self.imageMenuFlipImgHorz,self.imageMenuFlipImgVert])
+        self.imageMenuFlipVol = self.imageMenuFlip.addMenu('Volume')
+        self.imageMenuFlipVolX = QtGui.QAction('X',self.mainWin)
+        self.imageMenuFlipVolX.triggered.connect(self.flipImage)
+        self.imageMenuFlipVolY = QtGui.QAction('Y',self.mainWin)
+        self.imageMenuFlipVolY.triggered.connect(self.flipImage)
+        self.imageMenuFlipVolZ = QtGui.QAction('Z',self.mainWin)
+        self.imageMenuFlipVolZ.triggered.connect(self.flipImage)
+        self.imageMenuFlipVol.addActions([self.imageMenuFlipVolX,self.imageMenuFlipVolY,self.imageMenuFlipVolZ])
         
         self.imageMenuRotate90 = QtGui.QAction('Rotate 90',self.mainWin)
         self.imageMenuRotate90.triggered.connect(self.rotateImage90)
+        self.imageMenu.addActions([self.imageMenuRotate90])
+        
         self.imageMenuTransform = QtGui.QAction('Transform',self.mainWin)
         self.imageMenuTransform.triggered.connect(self.transformImage)
         self.imageMenuWarp = QtGui.QAction('Warp',self.mainWin)
         self.imageMenuWarp.triggered.connect(self.warpImage)
-        self.imageMenu.addActions([self.imageMenuRotate90,self.imageMenuTransform,self.imageMenuWarp])
         self.imageMenuMakeCCF = self.imageMenu.addMenu('Make CCF Volume')
         self.imageMenuMakeCCFNoIntp = QtGui.QAction('No Interpolation',self.mainWin)
         self.imageMenuMakeCCFNoIntp.triggered.connect(self.makeCCFVolume)
         self.imageMenuMakeCCFIntp = QtGui.QAction('Interpolate Z',self.mainWin)
         self.imageMenuMakeCCFIntp.triggered.connect(self.makeCCFVolume)
-        self.imageMenuMakeCCF.addActions([self.imageMenuMakeCCFNoIntp,self.imageMenuMakeCCFIntp])
+        self.imageMenuMakeCCF.addActions([self.imageMenuTransform,self.imageMenuWarp,self.imageMenuMakeCCFNoIntp,self.imageMenuMakeCCFIntp])
         
         # analysis menu
         self.analysisMenu = self.menuBar.addMenu('Analysis')
@@ -937,14 +944,26 @@ class ImageGui():
         self.displayImage(windows)
         
     def flipImage(self):
-        option = self.flipOptions.index(self.mainWin.sender())
-        for fileInd in self.selectedFileIndex:
-            if option==0:
-                self.imageObjs[fileInd].flipX()
-            elif option==1:
-                self.imageObjs[fileInd].flipY()
+        sender = self.mainWin.sender()
+        if sender in (self.imageMenuFlipImgHorz,self.imageMenuFlipImgVert):
+            fileInd = set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex)
+            if sender is self.imageMenuFlipImgVert:
+                axis = self.imageShapeIndex[self.selectedWindow][0]
             else:
-                self.imageObjs[fileInd].flipZ()
+                axis = self.imageShapeIndex[self.selectedWindow][1]
+            imgAxis = self.imageShapeIndex[self.selectedWindow][2]
+            imgInd = self.imageIndex[self.selectedWindow][imgAxis]
+        else:
+            fileInd = self.selectedFileIndex
+            if sender is self.imageMenuFlipVolX:
+                axis = 1
+            elif sender is self.imageMenuFlipVolY:
+                axis = 0
+            else:
+                axis = 2
+            imgAxis = imgInd = None
+        for f in fileInd:
+            self.imageObjs[f].flip(axis,imgAxis,imgInd)
         self.displayImage(self.getAffectedWindows())
         
     def rotateImage90(self):
@@ -2523,7 +2542,7 @@ class ImageGui():
             for c in contours[1:]:
                 merged = False
                 for i,m in enumerate(mergedContours):
-                    if np.any(np.in1d(c[:,0,1],m[:,0,1])):
+                    if np.any(np.in1d(c[:,0,mergeAxis],m[:,0,mergeAxis])):
                         mergedContours[i] = np.concatenate((m,c),axis=0)
                         merged = True
                         break
@@ -2600,11 +2619,11 @@ class ImageObj():
         elif fileType=='Image Series (*.tif *.btf *.png *.jpg *.jp2)':
             self.filePath = [[] for _ in range(numCh)]
             for ind,f in enumerate(filePath):
-                dtype,s,numCh = getImageInfo(f)
+                dtype,s,n = getImageInfo(f)
                 if chFileOrg=='rgb':
-                    if numCh!=3:
+                    if n!=3:
                         raise Exception('Images must be rgb if channel file organization is rgb')
-                elif numCh!=1:
+                elif n!=1:
                     raise Exception('Images must be grayscale if channel file organization is not rgb')
                 if ind==0:
                     self.fileType = 'bigtiff' if f[-4:]=='.btf' else 'image'
@@ -2776,25 +2795,19 @@ class ImageObj():
         self.dtype = dtype
         self.bitDepth = bitDepth
         self.levels = [[int(round(level*scaleFactor)) for level in levels] for levels in self.levels]
-            
-    def flipX(self):
-        if self.data is None:
-            pass
-        else:
-            self.data = self.data[:,::-1]
-            
-    def flipY(self):
-        if self.data is None:
-            pass
-        else:
-            self.data = self.data[::-1]
         
-    def flipZ(self):
+    def flip(self,axis,imgAxis=None,imgInd=None):
         if self.data is None:
-            for chFiles in self.filePath:
-                chFiles.reverse()
+            if imgInd is None and axis==2:
+                for chFiles in self.filePath:
+                    chFiles.reverse()
         else:
-            self.data = self.data[:,:,::-1]
+            ind = [slice(None)]*3
+            if imgInd is not None:
+                ind[imgAxis] = slice(imgInd,imgInd+1)
+            flipInd = ind[:]
+            flipInd[axis] = slice(None,None,-1)
+            self.data[ind] = self.data[flipInd]
         
     def rotate90(self):
         if self.data is None:
