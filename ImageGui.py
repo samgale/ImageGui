@@ -52,8 +52,8 @@ class ImageGui():
         self.fileOpenPath = os.path.dirname(os.path.realpath(__file__))
         self.fileOpenType = 'Image (*.tif  *png *.jpg *.jp2)'
         self.fileSavePath = self.fileOpenPath
-        self.plotColorOptions = ('Reg','Green','Blue','Cyan','Yellow','Magenta','Black','White')
-        self.plotColors = ('r','g','b','c','y','m','k','w')
+        self.plotColorOptions = ('Red','Green','Blue','Cyan','Yellow','Magenta','Black','White','Gray')
+        self.plotColors = ((1,0,0),(0,1,0),(0,0,1),(0,1,1),(1,1,0),(1,0,1),(0,0,0),(1,1,1),(0.5,0.5,0.5))
         self.numWindows = 4
         self.imageObjs = []
         self.selectedFileIndex = []
@@ -77,15 +77,18 @@ class ImageGui():
         self.holdStitchRange = [False]*self.numWindows
         self.markedPoints = [None]*self.numWindows
         self.markPointsSize = 5
-        self.markPointsColor = 'y'
+        self.markPointsColor = (1,1,0)
         self.selectedPoint = None
         self.alignRefWindow = [None]*self.numWindows
         self.alignRange = [[None,None] for _ in range(self.numWindows)]
         self.alignAxis = [None]*self.numWindows
         self.alignIndex = [None]*self.numWindows
         self.minContourVertices = 5
+        self.contourLineColor = (1,1,0)
         self.atlasAnnotationData = None
         self.atlasAnnotationRegions = None
+        self.atlasLineColor = (1,1,1)
+        self.selectedAtlasRegions = [[] for _ in range(self.numWindows)]
         self.selectedAtlasRegionIDs = [[] for _ in range(self.numWindows)]
         
         # main window
@@ -132,9 +135,18 @@ class ImageGui():
         self.optionsMenuImportLazy = QtGui.QAction('Use lazy/temporary import to save memory',self.mainWin,checkable=True)
         self.optionsMenuImportMemmap = QtGui.QAction('Try to import tif and btf files as memmap',self.mainWin,checkable=True)
         self.optionsMenuImportAutoColor = QtGui.QAction('Automatically Color Channels During Import',self.mainWin,checkable=True)
-        self.optionsMenu3dLineColor = QtGui.QAction('Set View 3D Line Color',self.mainWin)
-        self.optionsMenu3dLineColor.triggered.connect(self.setView3dLineColor)
-        self.optionsMenu.addActions([self.optionsMenuImportLazy,self.optionsMenuImportMemmap,self.optionsMenuImportAutoColor,self.optionsMenu3dLineColor])
+        self.optionsMenu.addActions([self.optionsMenuImportLazy,self.optionsMenuImportMemmap,self.optionsMenuImportAutoColor])
+        
+        self.optionsMenuSetColor = self.optionsMenu.addMenu('Set Color')
+        self.optionsMenuSetColorView3dLine = QtGui.QAction('View 3D Line',self.mainWin)
+        self.optionsMenuSetColorView3dLine.triggered.connect(self.setLineColor)
+        self.optionsMenuSetColorPoints = QtGui.QAction('Points',self.mainWin)
+        self.optionsMenuSetColorPoints.triggered.connect(self.setLineColor)
+        self.optionsMenuSetColorContours = QtGui.QAction('Contours',self.mainWin)
+        self.optionsMenuSetColorContours.triggered.connect(self.setLineColor)
+        self.optionsMenuSetColorAtlas = QtGui.QAction('Atlas',self.mainWin)
+        self.optionsMenuSetColorAtlas.triggered.connect(self.setLineColor)
+        self.optionsMenuSetColor.addActions([self.optionsMenuSetColorView3dLine,self.optionsMenuSetColorPoints,self.optionsMenuSetColorContours,self.optionsMenuSetColorAtlas])
         
         # image menu
         self.imageMenu = self.menuBar.addMenu('Image')
@@ -184,18 +196,20 @@ class ImageGui():
         
         self.imageMenuRotate90 = QtGui.QAction('Rotate 90',self.mainWin)
         self.imageMenuRotate90.triggered.connect(self.rotateImage90)
-        self.imageMenu.addActions([self.imageMenuRotate90])
+        self.imageMenu.addAction(self.imageMenuRotate90)
         
         self.imageMenuTransform = QtGui.QAction('Transform',self.mainWin)
         self.imageMenuTransform.triggered.connect(self.transformImage)
         self.imageMenuWarp = QtGui.QAction('Warp',self.mainWin)
         self.imageMenuWarp.triggered.connect(self.warpImage)
+        self.imageMenu.addActions([self.imageMenuTransform,self.imageMenuWarp])
+    
         self.imageMenuMakeCCF = self.imageMenu.addMenu('Make CCF Volume')
         self.imageMenuMakeCCFNoIntp = QtGui.QAction('No Interpolation',self.mainWin)
         self.imageMenuMakeCCFNoIntp.triggered.connect(self.makeCCFVolume)
         self.imageMenuMakeCCFIntp = QtGui.QAction('Interpolate Z',self.mainWin)
         self.imageMenuMakeCCFIntp.triggered.connect(self.makeCCFVolume)
-        self.imageMenuMakeCCF.addActions([self.imageMenuTransform,self.imageMenuWarp,self.imageMenuMakeCCFNoIntp,self.imageMenuMakeCCFIntp])
+        self.imageMenuMakeCCF.addActions([self.imageMenuMakeCCFNoIntp,self.imageMenuMakeCCFIntp])        
         
         # analysis menu
         self.analysisMenu = self.menuBar.addMenu('Analysis')
@@ -213,9 +227,11 @@ class ImageGui():
         
         self.analysisMenuPointsDraw = self.analysisMenuPoints.addMenu('Draw')
         self.analysisMenuPointsDrawLine = QtGui.QAction('Line',self.mainWin)
+        self.analysisMenuPointsDrawLine.triggered.connect(self.drawLines)
         self.analysisMenuPointsDrawPoly = QtGui.QAction('Polygon',self.mainWin)
+        self.analysisMenuPointsDrawPoly.triggered.connect(self.drawLines)
         self.analysisMenuPointsDrawTri = QtGui.QAction('Delauney Triangles',self.mainWin)
-        self.analysisMenuPointsDrawTri.triggered.connect(self.drawDelauneyTriangles)
+        self.analysisMenuPointsDrawTri.triggered.connect(self.drawLines)
         self.analysisMenuPointsDraw.addActions([self.analysisMenuPointsDrawLine,self.analysisMenuPointsDrawPoly,self.analysisMenuPointsDrawTri])
         
         self.analysisMenuPointsMeasure = self.analysisMenuPoints.addMenu('Measure')
@@ -547,17 +563,6 @@ class ImageGui():
         self.levelsControlLayout.addWidget(self.showBinaryCheckbox,4,1,1,1)
         
         # mark points tab        
-        self.markPointsColorMenu = QtGui.QComboBox()
-        self.markPointsColorMenu.addItems(self.plotColorOptions)
-        self.markPointsColorMenu.setCurrentIndex(4)
-        self.markPointsColorMenu.currentIndexChanged.connect(self.markPointsColorMenuCallback)
-        
-        self.decreasePointSizeButton = QtGui.QPushButton('-')
-        self.decreasePointSizeButton.clicked.connect(self.decreasePointSizeButtonCallback)
-        
-        self.increasePointSizeButton = QtGui.QPushButton('+')
-        self.increasePointSizeButton.clicked.connect(self.increasePointSizeButtonCallback)
-        
         self.markPointsTable = QtGui.QTableWidget(1,3)
         self.markPointsTable.resizeEvent = self.markPointsTableResizeCallback
         self.markPointsTable.keyPressEvent = self.markPointsTableKeyPressCallback
@@ -566,12 +571,8 @@ class ImageGui():
             item = QtGui.QTableWidgetItem('')
             item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
             self.markPointsTable.setItem(0,col,item)
-        
         self.markPointsLayout = QtGui.QGridLayout()
-        self.markPointsLayout.addWidget(self.markPointsColorMenu,0,0,1,2)
-        self.markPointsLayout.addWidget(self.decreasePointSizeButton,0,2,1,1)
-        self.markPointsLayout.addWidget(self.increasePointSizeButton,0,3,1,1)
-        self.markPointsLayout.addWidget(self.markPointsTable,1,0,4,4)
+        self.markPointsLayout.addWidget(self.markPointsTable,0,0,1,1)
         self.markPointsTab = QtGui.QWidget()
         self.markPointsTab.setLayout(self.markPointsLayout)
         self.tabs = QtGui.QTabWidget()
@@ -630,6 +631,24 @@ class ImageGui():
         
     def mainWinCloseCallback(self,event):
         event.accept()
+        
+    def setLineColor(self):
+        sender = self.mainWin.sender()
+        color,ok = QtGui.QInputDialog.getItem(self.mainWin,'Set Line Color','Choose Color',self.plotColorOptions,editable=False)
+        if not ok:
+            return
+        color = self.plotColors[self.plotColorOptions.index(color)]
+        if sender is self.optionsMenuSetColorView3dLine:
+            for windowLines in self.view3dSliceLines:
+                for line in windowLines:
+                    line.setPen(tuple(c*255 for c in color))
+        elif sender is self.optionsMenuSetColorPoints:
+            self.markPointsColor = color
+            self.plotMarkedPoints(self.displayedWindows)
+        elif sender is self.optionsMenuSetColorContours:
+            self.contourLineColor = color
+        elif sender is self.optionsMenuSetColorAtlas:
+            self.atlasLineColor = color
         
     def saveImage(self):
         filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'Image (*.tif  *png *.jpg)')
@@ -771,7 +790,7 @@ class ImageGui():
         self.normState[window] = False
         self.showBinaryState[window] = False
         self.stitchState[window] = False
-        self.selectedAtlasRegionIDs[window] = []
+        self.selectedAtlasRegions[window] = []
         self.displayedWindows.remove(window)
         self.imageItem[window].setImage(np.zeros((2,2,3),dtype=np.uint8),levels=[0,255])
         self.imageViewBox[window].setMouseEnabled(x=False,y=False)
@@ -785,7 +804,7 @@ class ImageGui():
             self.stitchCheckbox.setChecked(False)
             self.displayImageInfo()
             self.setViewBoxRange(self.displayedWindows) 
-            self.clearAtlasRegions(updateImage=False)
+            self.resetAtlasRegionMenu()
             self.alignCheckbox.setChecked(False)
         
     def displayImageInfo(self):
@@ -1237,9 +1256,11 @@ class ImageGui():
             image /= (levels[1]-levels[0])/self.levelsMax[window]
         dtype = np.uint8 if self.levelsMax[window]==255 or binary else np.uint16
         image = image.astype(dtype)
-        for regionID in self.selectedAtlasRegionIDs[window]:
-            _,contours,_ = cv2.findContours(self.getAtlasRegionMask(window,regionID,downsample).copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(image,contours,-1,(self.levelsMax[window],)*3,1,cv2.LINE_AA)
+        if len(self.selectedAtlasRegions[window])>0:
+            color = tuple(self.levelsMax[window]*c for c in self.atlasLineColor)
+            for regionID in self.selectedAtlasRegionIDs[window]:
+                _,contours,_ = cv2.findContours(self.getAtlasRegionMask(window,regionID,downsample).copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(image,contours,-1,color,1,cv2.LINE_AA)
         return image
                     
     def getImageData(self,imageObj,fileInd,window,channels,downsample,binary):
@@ -1358,9 +1379,11 @@ class ImageGui():
                 return
             self.fileOpenPath = os.path.dirname(filePath)
             self.atlasAnnotationRegions = minidom.parse(filePath)
-        regionIDs = [self.getAtlasRegionID(self.atlasRegionLabels[ind]) for ind,region in enumerate(self.atlasRegionMenu) if region.isChecked()]
+        selectedRegions = [ind for ind,region in enumerate(self.atlasRegionMenu) if region.isChecked()]
+        regionIDs = [self.getAtlasRegionID(self.atlasRegionLabels[ind]) for ind in selectedRegions]
         windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
         for window in windows:
+            self.selectedAtlasRegions[window] = selectedRegions
             self.selectedAtlasRegionIDs[window] = regionIDs
         self.displayImage(windows)
         
@@ -1369,17 +1392,16 @@ class ImageGui():
             if region.isChecked():
                 region.setChecked(False)
         
-    def clearAtlasRegions(self,updateImage=True):
-        if len(self.selectedAtlasRegionIDs[self.selectedWindow])>0:
+    def clearAtlasRegions(self):
+        if len(self.selectedAtlasRegions[self.selectedWindow])>0:
             self.resetAtlasRegionMenu()
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
             for window in windows:
-                self.selectedAtlasRegionIDs[window] = []
-            if updateImage or self.mainWin.sender() is not None:
-                self.displayImage(windows)
+                self.selectedAtlasRegions[window] = []
+            self.displayImage(windows)
                 
     def normRegionLevels(self):
-        if len(self.selectedAtlasRegionIDs[self.selectedWindow])>0:
+        if len(self.selectedAtlasRegions[self.selectedWindow])>0:
             a = np.in1d(self.atlasAnnotationData,self.selectedAtlasRegionIDs[self.selectedWindow][0]).reshape(self.atlasAnnotationData.shape)
             for fileInd in set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex):
                 for ch in range(self.imageObjs[fileInd].shape[3]):
@@ -1389,7 +1411,7 @@ class ImageGui():
             self.displayImage(windows)
         
     def setOutsideRegionZero(self):
-        if len(self.selectedAtlasRegionIDs[self.selectedWindow])>0:
+        if len(self.selectedAtlasRegions[self.selectedWindow])>0:
             a = np.logical_not(np.in1d(self.atlasAnnotationData,self.selectedAtlasRegionIDs[self.selectedWindow][0]).reshape(self.atlasAnnotationData.shape))
             for fileInd in set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex):
                 for ch in range(self.imageObjs[fileInd].shape[3]):
@@ -1474,7 +1496,8 @@ class ImageGui():
                             self.markedPoints[self.selectedWindow][rows,moveAxis] += dist
                             cols = [moveAxis]
                         else:
-                            rotMat = cv2.getRotationMatrix2D(tuple(s//2 for s in shape[::-1]),-dist/10,1)
+                            angle = -dist/10
+                            rotMat = cv2.getRotationMatrix2D(tuple(s//2 for s in shape[::-1]),angle,1)
                             rotMask = cv2.warpAffine(mask,rotMat,shape[1::-1])
                             mask = mask.astype(bool)
                             rotMask = rotMask.astype(bool)
@@ -1499,7 +1522,7 @@ class ImageGui():
                                 self.markPointsTable.item(row,ind).setText(str(self.markedPoints[self.selectedWindow][row,col]+1))
                     self.displayImage()
         elif self.selectedPoint is not None:
-            if key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace)+moveKeys[:4]:
+            if key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace)+moveKeys:
                 windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
                 for window in windows:
                     imgAxis = self.imageShapeIndex[window][2]
@@ -1510,7 +1533,7 @@ class ImageGui():
                             else:
                                 self.deleteSelectedPoint()
                             return
-                        else:
+                        elif key in moveKeys[:4]:
                             moveAxis,moveDist = self.getMoveParams(window,key,modifiers,True)
                             point = self.markedPoints[window][self.selectedPoint]
                             point[moveAxis] += moveDist
@@ -1523,6 +1546,14 @@ class ImageGui():
                                 ind = 2 if moveAxis==2 else int(not moveAxis)
                                 self.markPointsTable.item(self.selectedPoint,ind).setText(str(point[moveAxis]+1))
                             self.plotMarkedPoints([window])
+                        else:
+                            if key==QtCore.Qt.Key_Minus:
+                                if self.markPointsSize>1:
+                                    self.markPointsSize -= 1
+                            else:
+                                self.markPointsSize += 1
+                            self.plotMarkedPoints(self.displayedWindows)
+                            return
                     
     def getMoveParams(self,window,key,modifiers,flipVert=False):
         down,up = QtCore.Qt.Key_Down,QtCore.Qt.Key_Up
@@ -1804,7 +1835,7 @@ class ImageGui():
         self.showBinaryCheckbox.setChecked(self.showBinaryState[window])
         self.stitchCheckbox.setChecked(self.stitchState[window])
         for ind,region in enumerate(self.atlasRegionMenu):
-            region.setChecked(ind in self.selectedAtlasRegionIDs[window])
+            region.setChecked(ind in self.selectedAtlasRegions[window])
         self.clearPointsTable()
         self.fillPointsTable()
         self.selectedPoint = None
@@ -1961,14 +1992,6 @@ class ImageGui():
         self.xyzGroupBox.setEnabled(True)
         self.setLinkedViewOff()
         
-    def setView3dLineColor(self):
-        color,ok = QtGui.QInputDialog.getItem(self.mainWin,'Set View 3D Line Color','Choose Color',self.plotColorOptions,editable=False)
-        if ok:
-            color = self.plotColors[self.plotColorOptions.index(color)]
-            for windowLines in self.view3dSliceLines:
-                for line in windowLines:
-                    line.setPen(color)
-        
     def view3dSliceLineDragged(self):
         sender = self.mainWin.sender()
         for window,lines in enumerate(self.view3dSliceLines):
@@ -2004,6 +2027,7 @@ class ImageGui():
             self.normState[window] = self.normState[self.selectedWindow]
             self.showBinaryState[window] = self.showBinaryState[self.selectedWindow]
             self.stitchState[window] = self.stitchState[self.selectedWindow]
+            self.selectedAtlasRegions[window] = self.selectedAtlasRegions[self.selectedWindows]
             self.selectedAtlasRegionIDs[window] = self.selectedAtlasRegionIDs[self.selectedWindow]
             self.markedPoints[window] = self.markedPoints[self.selectedWindow]
         if self.stitchState[self.selectedWindow]:
@@ -2305,8 +2329,9 @@ class ImageGui():
                         y = np.append(y,y[0])
                 else:
                     x = y = []
-            pen = None if self.analysisMenuPointsLineNone.isChecked() else self.markPointsColor
-            self.markPointsPlot[window].setData(x=x,y=y,pen=pen,symbolSize=self.markPointsSize,symbolPen=self.markPointsColor)
+            color = tuple(255*c for c in self.markPointsColor)
+            pen = None if self.analysisMenuPointsLineNone.isChecked() else color
+            self.markPointsPlot[window].setData(x=x,y=y,pen=pen,symbolSize=self.markPointsSize,symbolPen=color)
         
     def fillPointsTable(self,append=False):
         if self.markedPoints[self.selectedWindow] is not None:
@@ -2352,20 +2377,7 @@ class ImageGui():
             self.markedPoints[window] = np.delete(self.markedPoints[window],self.selectedPoint,0)
         self.markPointsTable.removeRow(self.selectedPoint)
         self.selectedPoint = None
-        self.plotMarkedPoints()
-        
-    def markPointsColorMenuCallback(self):
-        self.markPointsColor = self.plotColors[self.markPointsColorMenu.currentIndex()]
-        self.plotMarkedPoints(self.displayedWindows)
-    
-    def decreasePointSizeButtonCallback(self):
-        if self.markPointsSize>1:
-            self.markPointsSize -= 1
-            self.plotMarkedPoints(self.displayedWindows)
-    
-    def increasePointSizeButtonCallback(self):
-        self.markPointsSize += 1
-        self.plotMarkedPoints(self.displayedWindows)
+        self.plotMarkedPoints(windows)
         
     def setMarkedPointsLineStyle(self):
         sender = self.mainWin.sender()
@@ -2373,24 +2385,33 @@ class ImageGui():
             option.setChecked(option is sender)
         self.plotMarkedPoints()
         
-    def drawDelauneyTriangles(self):
+    def drawLines(self):
+        sender = self.mainWin.sender()
         shapeIndex = self.imageShapeIndex[self.selectedWindow]
-        h,w = (self.imageShape[self.selectedWindow][i] for i in shapeIndex[:2])
         axis = shapeIndex[2]
         rng = self.imageRange[self.selectedWindow][axis] if self.sliceProjState[self.selectedWindow] else [self.imageIndex[self.selectedWindow][axis]]*2
         rows = np.logical_and(self.markedPoints[self.selectedWindow][:,axis]>=rng[0],self.markedPoints[self.selectedWindow][:,axis]<=rng[1])
-        if any(rows):
+        if not any(rows):
+            return
+        image = self.getImage()
+        pts = self.markedPoints[self.selectedWindow][rows][:,shapeIndex[1::-1]]
+        color = tuple(self.levelsMax[self.selectedWindow]*c for c in self.markPointsColor)
+        if sender is self.analysisMenuPointsDrawTri:
+            h,w = (self.imageShape[self.selectedWindow][i] for i in shapeIndex[:2])
             boundaryPts = getDelauneyBoundaryPoints(w,h)
-            pts = np.concatenate((self.markedPoints[self.selectedWindow][rows][:,shapeIndex[1::-1]],boundaryPts),axis=0).astype(np.float32)
+            pts = np.concatenate((pts,boundaryPts),axis=0).astype(np.float32)
             triangles = getDelauneyTriangles(pts,w,h)
-            image = self.getImage()
-            color = (self.levelsMax[self.selectedWindow],)*2+(0,)
             for tri in triangles:
                 p = [(tri[j],tri[j+1])for j in (0,2,4)]
                 cv2.line(image,p[0],p[1],color,1,cv2.LINE_AA)
                 cv2.line(image,p[1],p[2],color,1,cv2.LINE_AA)
                 cv2.line(image,p[2],p[0],color,1,cv2.LINE_AA)
-            self.imageItem[self.selectedWindow].setImage(image.transpose((1,0,2)),levels=[0,self.levelsMax[self.selectedWindow]])
+        else:
+            if sender is self.analysisMenuPointsDrawPoly:
+                pts = np.concatenate((pts,pts[-1]),axis=0)
+            for p in pts:
+                cv2.line(image,p[0],p[1],color,1,cv2.LINE_AA)
+        self.imageItem[self.selectedWindow].setImage(image.transpose((1,0,2)),levels=[0,self.levelsMax[self.selectedWindow]])
         
     def copyPoints(self):
         if self.markedPoints[self.selectedWindow] is None:
@@ -2556,7 +2577,7 @@ class ImageGui():
             self.contourHulls.append(cv2.convexHull(m))
             x,y,w,h = cv2.boundingRect(m)
             self.contourRectangles.append([x-1,y-1,w+2,h+2])
-        color = (255,255,0)
+        color = tuple(255*c for c in self.contourLineColor)
         lineWidth = -1 if self.analysisMenuContoursFill.isChecked() else 1
         sender = self.mainWin.sender()
         if sender is self.analysisMenuContoursFindRectangle:
