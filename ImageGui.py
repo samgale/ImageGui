@@ -75,6 +75,7 @@ class ImageGui():
         self.stitchState = [False]*self.numWindows
         self.stitchPos = np.full((self.numWindows,1,3),np.nan)
         self.holdStitchRange = [False]*self.numWindows
+        self.localAdjustHistory = [[] for _ in range(self.numWindows)]
         self.markedPoints = [None]*self.numWindows
         self.markPointsSize = 5
         self.markPointsColor = (1,1,0)
@@ -197,6 +198,15 @@ class ImageGui():
         self.imageMenuRotate90 = QtGui.QAction('Rotate 90',self.mainWin)
         self.imageMenuRotate90.triggered.connect(self.rotateImage90)
         self.imageMenu.addAction(self.imageMenuRotate90)
+        
+        self.imageMenuLocalAdjust = self.imageMenu.addMenu('Local Adjustments')
+        self.imageMenuLocalAdjustClear = QtGui.QAction('Clear History',self.mainWin)
+        self.imageMenuLocalAdjustClear.triggered.connect(self.clearLocalAdjustHistory)
+        self.imageMenuLocalAdjustSave = QtGui.QAction('Save History',self.mainWin)
+        self.imageMenuLocalAdjustSave.triggered.connect(self.saveLocalAdjustHistory)
+        self.imageMenuLocalAdjustLoad = QtGui.QAction('Load and Apply',self.mainWin)
+        self.imageMenuLocalAdjustLoad.triggered.connect(self.loadLocalAdjust)
+        self.imageMenuLocalAdjust.addActions([self.imageMenuLocalAdjustClear,self.imageMenuLocalAdjustSave,self.imageMenuLocalAdjustLoad])
         
         self.imageMenuTransform = QtGui.QAction('Transform',self.mainWin)
         self.imageMenuTransform.triggered.connect(self.transformImage)
@@ -797,6 +807,7 @@ class ImageGui():
         self.imageViewBox[window].setZValue(0)
         self.clearMarkedPoints([window])
         self.alignRefWindow[window] = None
+        self.localAdjustHistory[window] = []
         if window==self.selectedWindow:
             self.sliceButton.setChecked(True)
             self.zButton.setChecked(True)
@@ -1003,6 +1014,69 @@ class ImageGui():
             self.setViewBoxRange(affectedWindows)
         self.displayImage(affectedWindows)
         
+    def clearLocalAdjustHistory(self):
+        self.localAdjustHistory = [[] for _ in range(self.numWindows)]
+    
+    def saveLocalAdjustHistory(self):
+        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npz')
+        if filePath=='':
+            return
+        self.fileSavePath = os.path.dirname(filePath)
+        np.savez(filePath,*self.localAdjustHistory[self.selectedWindow])
+    
+    def loadLocalAdjust(self):
+        filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npz')
+        if filePath=='':
+            return
+        self.fileOpenPath = os.path.dirname(filePath)
+        f = np.load(filePath)
+        localAdjustHistory = [f[key] for key in f.keys()]
+        currentPixelSize = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].pixelSize[0]
+        if currentPixelSize is None:
+            currentPixelSize,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Set Current XY Pixel Size','\u03BCm/pixel:',0,min=0,decimals=4)
+            if not ok or currentPixelSize==0:
+                return
+            for fileInd in self.checkedFileIndex[self.selectedWindow]:
+                self.imageObjs[fileInd].pixelSize[:2] = [currentPixelSize]*2
+            self.displayPixelSize()        
+        newPixelSize,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Set New XY Pixel Size','\u03BCm/pixel:',currentPixelSize,min=0,decimals=4)
+        if not ok or newPixelSize==0:
+            return
+        scaleFactor = currentPixelSize/newPixelSize
+        numImgs = self.imageShape[self.selectedWindow][2]
+        mask = [[] for _ in range(numImgs)]
+        warpMat = [[] for _ in range(numImgs)]
+        for i in range(numImgs):
+                for pts in localAdjustHistory:
+                    if pts[0,0,2]==i:
+                        m = np.zeros((2,)+self.imageShape[self.selectedWindow][:2],dtype=np.uint8)
+                        mpts = [(p[None,:,1::-1]/scaleFactor).astype(int) for p in pts]
+                        cv2.fillPoly(m[0],[mpts[0]],255)
+                        cv2.fillPoly(m[1],[mpts[1]],255)
+                        mask[i].append(m.astype(bool))
+                        warpMat[i].append(cv2.estimateRigidTransform(mpts[0],mpts[1],fullAffine=False))
+        for fileInd in self.checkedFileIndex[self.selectedWindow]:
+            shape = tuple(int(round(self.imageObjs[fileInd].shape[i]*scaleFactor)) for i in (0,1))+self.imageObjs[fileInd].shape[2:]
+            adjustedData = np.zeros(shape,dtype=self.imageObjs[fileInd].dtype)
+            interpMethod = cv2.INTER_AREA if scaleFactor<1 else cv2.INTER_LINEAR
+            dataIter = self.imageObjs[fileInd].getDataIterator()
+            for i in range(shape[2]):
+                for ch in range(shape[3]):
+                    data = next(dataIter)
+                    for m,w in zip(mask[i],warpMat[i]):
+                        warpData = cv2.warpAffine(data,w,data.shape[1::-1],flags=cv2.INTER_LINEAR)
+                        data[m[0]] = 0
+                        data[m[1]] = warpData[m[1]]
+                    adjustedData[:,:,i,ch] = data if scaleFactor==1 else cv2.resize(data,shape[1::-1],interpolation=interpMethod)
+            self.imageObjs[fileInd].data = adjustedData
+            self.imageObjs[fileInd].shape = shape
+        if scaleFactor!=1:
+            self.imageShape[self.selectedWindow] = shape[:3]
+            self.setImageRange()
+            self.displayImageInfo()
+        self.setViewBoxRangeLimits()
+        self.displayImage()
+    
     def transformImage(self):
         self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
         refWin = self.alignRefWindow[self.selectedWindow]
@@ -1031,9 +1105,9 @@ class ImageGui():
                     _,contours,_ = cv2.findContours(image,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
                     mask.append(np.zeros(image.shape,dtype=np.uint8))
                     cv2.drawContours(mask[-1],contours,-1,1,-1)                    
-                _,warpMatrix = cv2.findTransformECC(mask[0],mask[1],np.eye(2,3,dtype=np.float32),cv2.MOTION_AFFINE)
+                _,warpMatrix = cv2.findTransformECC(mask[1],mask[0],np.eye(2,3,dtype=np.float32),cv2.MOTION_AFFINE)
                 for ch in range(warpData.shape[3]):
-                    warpData[:,:,ind,ch] = cv2.warpAffine(next(dataIter),warpMatrix,warpShape[1::-1],flags=cv2.INTER_LINEAR+cv2.WARP_INVERSE_MAP)
+                    warpData[:,:,ind,ch] = cv2.warpAffine(next(dataIter),warpMatrix,warpShape[1::-1],flags=cv2.INTER_LINEAR)
             self.imageObjs[fileInd].data = warpData
             self.imageObjs[fileInd].shape = warpData.shape
         for ind,window in enumerate((refWin,self.selectedWindow)):
@@ -1516,6 +1590,14 @@ class ImageGui():
                             rotMat[:,2] = rotMat[::-1,2]
                             cols = self.imageShapeIndex[self.selectedWindow][:2]
                             self.markedPoints[self.selectedWindow][rows[:,None],cols] = cv2.transform(pts[:,cols][:,None,:],rotMat).squeeze()
+                        appendToHistory = True
+                        for p in self.localAdjustHistory[self.selectedWindow]:
+                            if np.all(pts==p[1]):
+                                p[1] = self.markedPoints[self.selectedWindow][rows]
+                                appendToHistory = False
+                                break
+                        if appendToHistory:
+                            self.localAdjustHistory[self.selectedWindow].append(np.stack((pts,self.markedPoints[self.selectedWindow][rows])))
                         for row in rows:
                             for col in cols:
                                 ind = col if col==2 else int(not col)
