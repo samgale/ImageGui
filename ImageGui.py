@@ -158,6 +158,10 @@ class ImageGui():
         self.imageMenuConvertTo16Bit.triggered.connect(self.convertImage)
         self.imageMenuConvert.addActions([self.imageMenuConvertTo8Bit,self.imageMenuConvertTo16Bit])
         
+        self.imageMenuInvert = QtGui.QAction('Invert',self.mainWin)
+        self.imageMenuInvert.triggered.connect(self.invertImage)
+        self.imageMenu.addAction(self.imageMenuInvert)
+        
         self.imageMenuRange = self.imageMenu.addMenu('Set Range')
         self.imageMenuRangeLoad = QtGui.QAction('Load',self.mainWin)
         self.imageMenuRangeLoad.triggered.connect(self.loadImageRange)
@@ -225,6 +229,9 @@ class ImageGui():
         self.analysisMenu = self.menuBar.addMenu('Analysis')
         self.analysisMenuPoints = self.analysisMenu.addMenu('Points')
         
+        self.analysisMenuPointsLock = QtGui.QAction('Lock',self.mainWin,checkable=True)
+        self.analysisMenuPoints.addAction(self.analysisMenuPointsLock)
+        
         self.analysisMenuPointsLine = self.analysisMenuPoints.addMenu('Line')
         self.analysisMenuPointsLineNone = QtGui.QAction('None',self.mainWin,checkable=True)
         self.analysisMenuPointsLineNone.setChecked(True)
@@ -251,13 +258,17 @@ class ImageGui():
         self.analysisMenuPointsMeasure.addActions([self.analysisMenuPointsMeasureDisplay,self.analysisMenuPointsMeasureClipboard,self.analysisMenuPointsMeasureSave])
 
         self.analysisMenuPointsCopy = self.analysisMenuPoints.addMenu('Copy')
-        self.analysisMenuPointsCopyFlip = QtGui.QAction('Flip',self.mainWin)
+        self.analysisMenuPointsCopyFlip = QtGui.QAction('Flip Horizontal',self.mainWin)
         self.analysisMenuPointsCopyFlip.triggered.connect(self.copyPoints)
-        self.analysisMenuPointsCopyPrevious = QtGui.QAction('Previous',self.mainWin)
+        self.analysisMenuPointsCopyPrevious = QtGui.QAction('From Previous Image',self.mainWin)
         self.analysisMenuPointsCopyPrevious.triggered.connect(self.copyPoints)
-        self.analysisMenuPointsCopyNext = QtGui.QAction('Next',self.mainWin)
+        self.analysisMenuPointsCopyNext = QtGui.QAction('From Next Image',self.mainWin)
         self.analysisMenuPointsCopyNext.triggered.connect(self.copyPoints)
-        self.analysisMenuPointsCopy.addActions([self.analysisMenuPointsCopyFlip,self.analysisMenuPointsCopyPrevious,self.analysisMenuPointsCopyNext])
+        self.analysisMenuPointsCopyAlignedImg = QtGui.QAction('From Aligned Image',self.mainWin)
+        self.analysisMenuPointsCopyAlignedImg.triggered.connect(self.copyRefPoints)
+        self.analysisMenuPointsCopyAlignedVol = QtGui.QAction('From Aligned Volume',self.mainWin)
+        self.analysisMenuPointsCopyAlignedVol.triggered.connect(self.copyRefPoints)
+        self.analysisMenuPointsCopy.addActions([self.analysisMenuPointsCopyFlip,self.analysisMenuPointsCopyPrevious,self.analysisMenuPointsCopyNext,self.analysisMenuPointsCopyAlignedImg,self.analysisMenuPointsCopyAlignedVol])
         
         self.analysisMenuPointsLoad = QtGui.QAction('Load',self.mainWin)
         self.analysisMenuPointsLoad.triggered.connect(self.loadPoints)
@@ -301,13 +312,15 @@ class ImageGui():
             self.atlasRegionMenu[-1].triggered.connect(self.setAtlasRegions)
         self.atlasMenuSelect.addActions(self.atlasRegionMenu)
         
+        self.atlasMenuClear = QtGui.QAction('Clear All',self.mainWin)
+        self.atlasMenuClear.triggered.connect(self.clearAtlasRegions)
+        self.atlasResetAnnotation = QtGui.QAction('Reset Annotation Data',self.mainWin)
+        self.atlasResetAnnotation.triggered.connect(self.resetAnnotationData)
         self.atlasMenuNorm = QtGui.QAction('Normalize Region Levels',self.mainWin)
         self.atlasMenuNorm.triggered.connect(self.normRegionLevels)
         self.atlasMenuZero = QtGui.QAction('Set Zero Outside Region',self.mainWin)
         self.atlasMenuZero.triggered.connect(self.setOutsideRegionZero)
-        self.atlasMenuClear = QtGui.QAction('Clear All',self.mainWin)
-        self.atlasMenuClear.triggered.connect(self.clearAtlasRegions)
-        self.atlasMenu.addActions([self.atlasMenuNorm,self.atlasMenuZero,self.atlasMenuClear])
+        self.atlasMenu.addActions([self.atlasMenuClear,self.atlasResetAnnotation,self.atlasMenuNorm,self.atlasMenuZero])
         
         # image windows
         self.imageLayout = pg.GraphicsLayoutWidget()
@@ -607,9 +620,6 @@ class ImageGui():
         self.alignCheckbox = QtGui.QCheckBox('Align')
         self.alignCheckbox.clicked.connect(self.alignCheckboxCallback)
         
-        self.copyRefPointsButton = QtGui.QPushButton('Copy Points')
-        self.copyRefPointsButton.clicked.connect(self.copyRefPointsButtonCallback)
-        
         self.alignLayout = QtGui.QGridLayout()
         self.alignLayout.addWidget(self.alignRefLabel,0,0,1,1)
         self.alignLayout.addWidget(self.alignRefMenu,0,1,1,1)
@@ -617,8 +627,7 @@ class ImageGui():
         self.alignLayout.addWidget(self.alignStartEdit,1,1,1,1)
         self.alignLayout.addWidget(self.alignEndLabel,2,0,1,1)
         self.alignLayout.addWidget(self.alignEndEdit,2,1,1,1)
-        self.alignLayout.addWidget(self.alignCheckbox,3,0,1,1)
-        self.alignLayout.addWidget(self.copyRefPointsButton,3,1,1,1)
+        self.alignLayout.addWidget(self.alignCheckbox,3,1,1,1)
         self.alignTab = QtGui.QWidget()
         self.alignTab.setLayout(self.alignLayout)
         self.tabs.addTab(self.alignTab,'Align')
@@ -725,18 +734,15 @@ class ImageGui():
         isMappable = any(True for f in filePaths if f[-4:] in ('.tif','.btf'))
         if fileType=='Image Series (*.tif *.btf *.png *.jpg *.jp2)':
             filePaths = [filePaths]
-            numCh,ok = QtGui.QInputDialog.getInt(self.mainWin,'Import Image Series','Number of channels:',1,min=1)
+            chFileOrg,ok = QtGui.QInputDialog.getItem(self.mainWin,'Import Image Series','Channel file organization:',('rgb','alternating','blocks'))
             if not ok:
                 return
-            if numCh>1:
-                chFileOrg,ok = QtGui.QInputDialog.getItem(self.mainWin,'Import Image Series','Channel file organization:',('alternating','blocks','rgb'))
+            if chFileOrg in ('alternating','blocks'):
+                numCh,ok = QtGui.QInputDialog.getInt(self.mainWin,'Import Image Series','Number of channels:',1,min=1)
                 if not ok:
                     return
-            if chFileOrg=='rgb':
-                if numCh!=3:
-                    raise Exception('Number of channels must equal 3 for rgb channel file organization')
-            elif len(filePaths[0])%numCh>0:
-                raise Exception('Number of files must be the same for each channel')
+                if len(filePaths[0])%numCh>0:
+                    raise Exception('Number of files must be the same for each channel')
         elif fileType=='Bruker Dir + Siblings (*.xml)':
             dirPath = os.path.dirname(os.path.dirname(filePaths[0]))
             filePaths = []
@@ -919,6 +925,13 @@ class ImageGui():
                 self.updateLevelsRange()
                 self.displayImageLevels()
                 self.displayImage()
+                
+    def invertImage(self):
+        for fileInd in self.selectedFileIndex:
+            self.imageObjs[fileInd].invert()
+        if self.selectedWindow in self.getAffectedWindows():
+            self.displayImageLevels()
+            self.displayImage()
             
     def setPixelSize(self):
         if self.mainWin.sender() is self.imageMenuPixelSizeXY:
@@ -1473,6 +1486,9 @@ class ImageGui():
             for window in windows:
                 self.selectedAtlasRegions[window] = []
             self.displayImage(windows)
+            
+    def resetAnnotationData(self):
+        self.atlasAnnotationData = self.atlasAnnotationRegions = None
                 
     def normRegionLevels(self):
         if len(self.selectedAtlasRegions[self.selectedWindow])>0:
@@ -1497,16 +1513,38 @@ class ImageGui():
         key = event.key()
         modifiers = self.app.keyboardModifiers()
         moveKeys = (QtCore.Qt.Key_Down,QtCore.Qt.Key_Up,QtCore.Qt.Key_Left,QtCore.Qt.Key_Right,QtCore.Qt.Key_Minus,QtCore.Qt.Key_Equal)
-        if key==QtCore.Qt.Key_W:
-            self.setViewBoxRange(self.displayedWindows)
-        elif key in (QtCore.Qt.Key_Comma,QtCore.Qt.Key_Period):
+        if key in (QtCore.Qt.Key_Comma,QtCore.Qt.Key_Period):
             if self.sliceButton.isChecked() and not self.view3dCheckbox.isChecked():
                 axis = self.imageShapeIndex[self.selectedWindow][2]
                 imgInd = self.imageIndex[self.selectedWindow][axis]
-                if key==44: # <
-                    self.setImageNum(axis,imgInd-1)
-                else: # >
-                    self.setImageNum(axis,imgInd+1)
+                if int(modifiers & QtCore.Qt.AltModifier)>0:
+                    if key==QtCore.Qt.Key_Comma and imgInd>self.imageRange[self.selectedWindow][axis][0]:
+                        swapInd = [imgInd-1,imgInd]
+                        imgInd -= 1
+                    elif key==QtCore.Qt.Key_Period and imgInd<self.imageRange[self.selectedWindow][axis][1]:
+                        swapInd = [imgInd,imgInd+1]
+                        imgInd += 1
+                    else:
+                        return
+                    for fileInd in self.checkedFileIndex[self.selectedWindow]:
+                        d = self.imageObjs[fileInd].data
+                        if axis==2:
+                            d[:,:,swapInd] = d[:,:,swapInd[::-1]]
+                        elif axis==1:
+                            d[:,swapInd] = d[:,swapInd[::-1],:]
+                        else:
+                            d[swapInd] = d[swapInd[::-1]]
+                    self.imageNumEditBoxes[axis].setText(str(imgInd+1))
+                    self.imageIndex[self.selectedWindow][axis] = imgInd
+                else:
+                    if key==QtCore.Qt.Key_Comma:
+                        self.setImageNum(axis,imgInd-1)
+                    else:
+                        self.setImageNum(axis,imgInd+1)        
+        elif key==QtCore.Qt.Key_W:
+            self.setViewBoxRange(self.displayedWindows)
+        elif key==QtCore.Qt.Key_L:
+            self.analysisMenuPointsLock.setChecked(not self.analysisMenuPointsLock.isChecked())
         elif self.stitchCheckbox.isChecked():
             if key in moveKeys:
                 windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
@@ -1515,6 +1553,13 @@ class ImageGui():
                 self.stitchPos[windows,fileInd,moveAxis] += moveDist
                 self.updateStitchShape(windows)
                 self.displayImage(windows)
+        elif key==QtCore.Qt.Key_F:
+            axis = self.imageShapeIndex[self.selectedWindow][1]
+            imgAxis = self.imageShapeIndex[self.selectedWindow][2]
+            imgInd = self.imageIndex[self.selectedWindow][imgAxis]
+            for f in (set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex)):
+                self.imageObjs[f].flip(axis,imgAxis,imgInd)
+                self.displayImage(self.getAffectedWindows())
         elif int(modifiers & QtCore.Qt.AltModifier)>0:
             if key in (QtCore.Qt.Key_0,QtCore.Qt.Key_1)+moveKeys:
                 axis = self.imageShapeIndex[self.selectedWindow][2]
@@ -1610,10 +1655,11 @@ class ImageGui():
                     imgAxis = self.imageShapeIndex[window][2]
                     if self.markedPoints[window][self.selectedPoint,imgAxis]==self.imageIndex[window][imgAxis]:
                         if key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace):
-                            if int(modifiers & QtCore.Qt.ControlModifier)>0 or self.markedPoints[window].shape[0]<2:
-                                self.clearMarkedPoints()
-                            else:
-                                self.deleteSelectedPoint()
+                            if not self.analysisMenuPointsLock.isChecked():
+                                if int(modifiers & QtCore.Qt.ControlModifier)>0 or self.markedPoints[window].shape[0]<2:
+                                    self.clearMarkedPoints()
+                                else:
+                                    self.deleteSelectedPoint()
                             return
                         elif key in moveKeys[:4]:
                             moveAxis,moveDist = self.getMoveParams(window,key,modifiers,True)
@@ -1697,6 +1743,8 @@ class ImageGui():
                 self.selectedPoint = rows[np.argmin(np.sum(np.absolute(self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]]-[y,x]),axis=1))]
         
     def imageDoubleClickCallback(self,event,window):
+        if self.analysisMenuPointsLock.isChecked():
+            return
         x,y = event.pos().x(),event.pos().y()
         newPoint = np.array([y,x,self.imageIndex[window][self.imageShapeIndex[window][2]]])[list(self.imageShapeIndex[window])]
         windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [window]
@@ -2564,20 +2612,27 @@ class ImageGui():
                 contents = contents[:-1]+'\n'
             self.app.clipboard().setText(contents)
             
-    def copyRefPointsButtonCallback(self):
+    def copyRefPoints(self):
         refWin = self.alignRefWindow[self.selectedWindow]
-        if refWin is None:
+        if refWin is None or self.markedPoints[refWin] is None:
             return
-        self.clearMarkedPoints()
-        if self.markedPoints[refWin] is not None:
-            axis = self.alignAxis[self.selectedWindow]
-            for imgInd in range(self.imageShape[self.selectedWindow][axis]):
-                refInd = self.getAlignedRefImageIndex(self.selectedWindow,imgInd)
-                pts = self.markedPoints[refWin][self.markedPoints[refWin][:,axis]==refInd].copy()
-                pts[:,axis] = imgInd
-                self.markedPoints[self.selectedWindow] = pts if self.markedPoints[self.selectedWindow] is None else np.concatenate((self.markedPoints[self.selectedWindow],pts))
-            self.fillPointsTable()
-            self.plotMarkedPoints()
+        axis = self.alignAxis[self.selectedWindow]
+        if self.mainWin.sender() is self.analysisMenuPointsCopyAlignedVol:
+            self.markedPoints[self.selectedWindow] = None
+            imgRange = self.imageRange[self.selectedWindow][axis]
+        else:
+            imgRange = (self.imageIndex[self.selectedWindow][axis],)*2
+        for imgInd in range(imgRange[0],imgRange[1]+1):
+            refInd = self.getAlignedRefImageIndex(self.selectedWindow,imgInd)
+            pts = self.markedPoints[refWin][self.markedPoints[refWin][:,axis]==refInd].copy()
+            pts[:,axis] = imgInd
+            if self.markedPoints[self.selectedWindow] is None:
+                self.markedPoints[self.selectedWindow] = pts
+            else:
+                rows = self.markedPoints[self.selectedWindow][:,axis]!=imgInd
+                self.markedPoints[self.selectedWindow] = np.concatenate((self.markedPoints[self.selectedWindow][rows],pts))
+        self.fillPointsTable()
+        self.plotMarkedPoints()
         
     def alignCheckboxCallback(self):
         if self.alignCheckbox.isChecked():
@@ -2720,23 +2775,24 @@ class ImageObj():
             self.filePath = [[filePath]]*numCh
             self.shape = shape+(1,numCh)
         elif fileType=='Image Series (*.tif *.btf *.png *.jpg *.jp2)':
-            self.filePath = [[] for _ in range(numCh)]
             for ind,f in enumerate(filePath):
                 dtype,s,n = getImageInfo(f)
-                if chFileOrg=='rgb':
-                    if n!=3:
-                        raise Exception('Images must be rgb if channel file organization is rgb')
-                elif n!=1:
-                    raise Exception('Images must be grayscale if channel file organization is not rgb')
                 if ind==0:
                     self.fileType = 'bigtiff' if f[-4:]=='.btf' else 'image'
+                    self.filePath = [[] for _ in range(n)]
                     self.dtype = dtype
                     shape = s
+                    numCh = n
                 else:
                     if (self.fileType=='bitfiff' and f[-4:]!='.btf') or (self.fileType=='image' and f[-4:]=='.btf'):
                         raise Exception('All image files in series must be .btf if any are .btf')
-                    if self.dtype!=dtype:
+                    if dtype!=self.dtype:
                         raise Exception('All images in series must have the same data type')
+                    if chFileOrg=='rgb':
+                        if n!=numCh:
+                            raise Exception('All rgb images must have the same number of channels')
+                    elif n>1:
+                        raise Exception('Images must be grayscale if channel file organization is not rgb')
                     shape = (max(shape[0],s[0]),max(shape[1],s[1]))
                 if chFileOrg=='rgb':
                     for ch in range(numCh):
@@ -2854,12 +2910,12 @@ class ImageObj():
             for ch in channels:
                 if data is None:
                     imgData = getImageData(self.filePath[ch][img],self.memmap)
-                    numCh = 3 if len(imgData.shape)>2 else 1
+                    numCh = 1 if len(imgData.shape)<3 else imgData.shape[2]
                     d = np.zeros(self.shape[:2]+(numCh,),dtype=self.dtype)
                     i = (self.shape[0]-imgData.shape[0])//2
                     j = (self.shape[1]-imgData.shape[1])//2
                     d[i:i+imgData.shape[0],j:j+imgData.shape[1],:] = imgData
-                    if len(d.shape)>2:
+                    if numCh>1:
                         for c in channels:
                             yield d[:,:,c]
                         break
@@ -2898,6 +2954,14 @@ class ImageObj():
         self.dtype = dtype
         self.bitDepth = bitDepth
         self.levels = [[int(round(level*scaleFactor)) for level in levels] for levels in self.levels]
+        
+    def invert(self):
+        if self.data is None:
+            pass
+        else:
+            levelsMax = 2**self.bitDepth-1
+            self.data = levelsMax - self.data
+            self.levels = [[levelsMax-level for level in reversed(levels)] for levels in self.levels]
         
     def flip(self,axis,imgAxis=None,imgInd=None):
         if self.data is None:
