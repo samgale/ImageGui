@@ -15,11 +15,11 @@ http://api.brain-map.org/api/v2/structure_graph_download/1.json
 from __future__ import division
 import sip
 sip.setapi('QString', 2)
-import math, os, PIL, time, zipfile
-import cv2, nrrd, tifffile
+import math, os, time, zipfile
+import cv2, nrrd, PIL, png, tifffile
 from xml.dom import minidom
 import numpy as np
-import scipy.io, scipy.interpolate
+import scipy.io, scipy.interpolate, scipy.ndimage
 from PyQt4 import QtGui, QtCore
 import pyqtgraph as pg
 
@@ -162,6 +162,20 @@ class ImageGui():
         self.imageMenuInvert.triggered.connect(self.invertImage)
         self.imageMenu.addAction(self.imageMenuInvert)
         
+        self.imageMenuNorm = self.imageMenu.addMenu('Normalize')
+        self.imageMenuNormImages = QtGui.QAction('Images',self.mainWin)
+        self.imageMenuNormImages.triggered.connect(self.normalizeImage)
+        self.imageMenuNormVolume = QtGui.QAction('Volume',self.mainWin)
+        self.imageMenuNormVolume.triggered.connect(self.normalizeImage)
+        self.imageMenuNorm.addActions([self.imageMenuNormImages,self.imageMenuNormVolume])
+        
+        self.imageMenuBackground = self.imageMenu.addMenu('Change Background')
+        self.imageMenuBackgroundBtoW = QtGui.QAction('Black To White',self.mainWin)
+        self.imageMenuBackgroundBtoW.triggered.connect(self.changeBackground)
+        self.imageMenuBackgroundWtoB = QtGui.QAction('White To Black',self.mainWin)
+        self.imageMenuBackgroundWtoB.triggered.connect(self.changeBackground)
+        self.imageMenuBackground.addActions([self.imageMenuBackgroundBtoW,self.imageMenuBackgroundWtoB])
+        
         self.imageMenuRange = self.imageMenu.addMenu('Set Range')
         self.imageMenuRangeLoad = QtGui.QAction('Load',self.mainWin)
         self.imageMenuRangeLoad.triggered.connect(self.loadImageRange)
@@ -199,9 +213,43 @@ class ImageGui():
         self.imageMenuFlipVolZ.triggered.connect(self.flipImage)
         self.imageMenuFlipVol.addActions([self.imageMenuFlipVolX,self.imageMenuFlipVolY,self.imageMenuFlipVolZ])
         
-        self.imageMenuRotate90 = QtGui.QAction('Rotate 90',self.mainWin)
-        self.imageMenuRotate90.triggered.connect(self.rotateImage90)
-        self.imageMenu.addAction(self.imageMenuRotate90)
+        self.imageMenuRotate = self.imageMenu.addMenu('Rotate')
+        self.imageMenuRotate90C = QtGui.QAction('90 Deg Clockwise',self.mainWin)
+        self.imageMenuRotate90C.triggered.connect(self.rotateImage)
+        self.imageMenuRotate90CC = QtGui.QAction('90 Deg Counter-Clockwise',self.mainWin)
+        self.imageMenuRotate90CC.triggered.connect(self.rotateImage)
+        self.imageMenuRotateAngle = QtGui.QAction('Angle',self.mainWin)
+        self.imageMenuRotateAngle.triggered.connect(self.rotateImage)
+        self.imageMenuRotateLine = QtGui.QAction('To Line',self.mainWin)
+        self.imageMenuRotateLine.triggered.connect(self.rotateImage)
+        self.imageMenuRotate.addActions([self.imageMenuRotate90C,self.imageMenuRotate90CC,self.imageMenuRotateAngle,self.imageMenuRotateLine])
+        
+        self.imageMenuSaveOffsets = QtGui.QAction('Save Offsets',self.mainWin)
+        self.imageMenuSaveOffsets.triggered.connect(self.saveOffsets)
+        self.imageMenu.addAction(self.imageMenuSaveOffsets)
+        
+        self.imageMenuStitch = self.imageMenu.addMenu('Stitch')
+        self.imageMenuStitchOverlay = self.imageMenuStitch.addMenu('Overlay')
+        self.imageMenuStitchOverlayMax = QtGui.QAction('Max',self.mainWin,checkable=True)
+        self.imageMenuStitchOverlayMax.setChecked(True)
+        self.imageMenuStitchOverlayMax.triggered.connect(self.setStitchOverlayMode)
+        self.imageMenuStitchOverlayReplace = QtGui.QAction('Replace',self.mainWin,checkable=True)
+        self.imageMenuStitchOverlayReplace.triggered.connect(self.setStitchOverlayMode)
+        self.imageMenuStitchOverlay.addActions([self.imageMenuStitchOverlayMax,self.imageMenuStitchOverlayReplace])
+        
+        self.imageMenuStitchTile = self.imageMenuStitch.addMenu('Tile')
+        self.imageMenuStitchTileXY = QtGui.QAction('XY',self.mainWin,checkable=True)
+        self.imageMenuStitchTileXY.setChecked(True)
+        self.imageMenuStitchTileXY.triggered.connect(self.setStitchTileMode)
+        self.imageMenuStitchTileZ = QtGui.QAction('Z',self.mainWin,checkable=True)
+        self.imageMenuStitchTileZ.triggered.connect(self.setStitchTileMode)
+        self.imageMenuStitchTile.addActions([self.imageMenuStitchTileXY,self.imageMenuStitchTileZ])        
+        
+        self.imageMenuStitchLoad = QtGui.QAction('Load Postions',self.mainWin)
+        self.imageMenuStitchLoad.triggered.connect(self.loadStitchPositions)
+        self.imageMenuStitchSave = QtGui.QAction('Save Postions',self.mainWin)
+        self.imageMenuStitchSave.triggered.connect(self.saveStitchPositions)
+        self.imageMenuStitch.addActions([self.imageMenuStitchLoad,self.imageMenuStitchSave])
         
         self.imageMenuLocalAdjust = self.imageMenu.addMenu('Local Adjustments')
         self.imageMenuLocalAdjustClear = QtGui.QAction('Clear History',self.mainWin)
@@ -212,11 +260,18 @@ class ImageGui():
         self.imageMenuLocalAdjustLoad.triggered.connect(self.loadLocalAdjust)
         self.imageMenuLocalAdjust.addActions([self.imageMenuLocalAdjustClear,self.imageMenuLocalAdjustSave,self.imageMenuLocalAdjustLoad])
         
-        self.imageMenuTransform = QtGui.QAction('Transform',self.mainWin)
-        self.imageMenuTransform.triggered.connect(self.transformImage)
+        self.imageMenuTransform = self.imageMenu.addMenu('Transform')
+        self.imageMenuTransformAligned = QtGui.QAction('Transform Aligned',self.mainWin)
+        self.imageMenuTransformAligned.triggered.connect(self.transformImage)
+        self.imageMenuTransformLoad = QtGui.QAction('Load Transform Matrix',self.mainWin)
+        self.imageMenuTransformLoad.triggered.connect(self.transformImage)
+        self.imageMenuTransformSave = QtGui.QAction('Save Transform Matrix',self.mainWin)
+        self.imageMenuTransformSave.triggered.connect(self.saveTransformMatrix)
+        self.imageMenuTransform.addActions([self.imageMenuTransformAligned,self.imageMenuTransformLoad,self.imageMenuTransformSave])
+        
         self.imageMenuWarp = QtGui.QAction('Warp',self.mainWin)
         self.imageMenuWarp.triggered.connect(self.warpImage)
-        self.imageMenu.addActions([self.imageMenuTransform,self.imageMenuWarp])
+        self.imageMenu.addAction(self.imageMenuWarp)
     
         self.imageMenuMakeCCF = self.imageMenu.addMenu('Make CCF Volume')
         self.imageMenuMakeCCFNoIntp = QtGui.QAction('No Interpolation',self.mainWin)
@@ -314,13 +369,27 @@ class ImageGui():
         
         self.atlasMenuClear = QtGui.QAction('Clear All',self.mainWin)
         self.atlasMenuClear.triggered.connect(self.clearAtlasRegions)
+        self.atlasMenu.addAction(self.atlasMenuClear)
+        
+        self.atlasMenuHemi = self.atlasMenu.addMenu('Hemisphere')
+        self.atlasMenuHemiBoth = QtGui.QAction('Both',self.mainWin,checkable=True)
+        self.atlasMenuHemiBoth.setChecked(True)
+        self.atlasMenuHemiBoth.triggered.connect(self.setAtlasHemi)
+        self.atlasMenuHemiLeft = QtGui.QAction('Left',self.mainWin,checkable=True)
+        self.atlasMenuHemiLeft.triggered.connect(self.setAtlasHemi)
+        self.atlasMenuHemiRight = QtGui.QAction('Right',self.mainWin,checkable=True)
+        self.atlasMenuHemiRight.triggered.connect(self.setAtlasHemi)
+        self.atlasMenuHemi.addActions([self.atlasMenuHemiBoth,self.atlasMenuHemiLeft,self.atlasMenuHemiRight])
+        
+        self.atlasRotateAnnotation = QtGui.QAction('Rotate Annotation Data',self.mainWin)
+        self.atlasRotateAnnotation.triggered.connect(self.rotateAnnotationData)
         self.atlasResetAnnotation = QtGui.QAction('Reset Annotation Data',self.mainWin)
         self.atlasResetAnnotation.triggered.connect(self.resetAnnotationData)
         self.atlasMenuNorm = QtGui.QAction('Normalize Region Levels',self.mainWin)
         self.atlasMenuNorm.triggered.connect(self.normRegionLevels)
         self.atlasMenuZero = QtGui.QAction('Set Zero Outside Region',self.mainWin)
         self.atlasMenuZero.triggered.connect(self.setOutsideRegionZero)
-        self.atlasMenu.addActions([self.atlasMenuClear,self.atlasResetAnnotation,self.atlasMenuNorm,self.atlasMenuZero])
+        self.atlasMenu.addActions([self.atlasRotateAnnotation,self.atlasResetAnnotation,self.atlasMenuNorm,self.atlasMenuZero])
         
         # image windows
         self.imageLayout = pg.GraphicsLayoutWidget()
@@ -676,7 +745,9 @@ class ImageGui():
         self.fileSavePath = os.path.dirname(filePath)
         yRange,xRange = [self.imageRange[self.selectedWindow][axis] for axis in self.imageShapeIndex[self.selectedWindow][:2]]
         image = self.imageItem[self.selectedWindow].image.transpose((1,0,2)) if self.mainWin.sender() is self.fileMenuSaveDisplay else self.getImage()
-        cv2.imwrite(filePath,image[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1,::-1])
+        image = image[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1]
+        image = image[:,:,0] if self.isGray() else image[:,:,::-1]
+        cv2.imwrite(filePath,image)
         
     def saveVolume(self):
         sender = self.mainWin.sender()
@@ -702,26 +773,39 @@ class ImageGui():
             if not ok:
                 return
             vidOut = cv2.VideoWriter(filePath,-1,frameRate,volumeShape[1::-1])
-        elif fileType in ('npz','mat'):
-            data = np.zeros(volumeShape+(3,),dtype=self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].dtype)
         for i,imgInd in enumerate(range(zRange[0],zRange[1]+1)):
             self.imageIndex[self.selectedWindow][axis] = imgInd
             img = self.getImage()[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1]
+            if self.isGray():
+                img = img[:,:,0]
             if fileType in ('tif','png','jpg'):
-                cv2.imwrite(filePath[:-4]+'_'+str(i+1)+'.'+fileType,img[:,:,::-1])
+                if len(img.shape)>2:
+                    img = img[:,:,::-1]
+                cv2.imwrite(filePath[:-4]+'_'+str(i+1)+'.'+fileType,img)
             elif fileType=='avi':
                 vidOut.write(img)
             else:
+                if i==0:
+                    dshape = volumeShape+(3,) if len(img.shape)>2 else volumeShape
+                    data = np.zeros(dshape,dtype=self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].dtype)
                 data[:,:,i] = img
         self.imageIndex[self.selectedWindow][axis] = imageIndex
         if fileType=='avi':
             vidOut.release()
         elif fileType in ('npz','mat'):
-            data = {'imageData':data}
             if fileType=='npz':
-                np.savez_compressed(filePath,**data)
+                np.savez_compressed(filePath,imageData=data)
             else:
-                scipy.io.savemat(filePath,data,do_compression=True)
+                scipy.io.savemat(filePath,{'imageData':data},do_compression=True)
+    
+    def isGray(self):            
+        for fileInd in self.checkedFileIndex[self.selectedWindow]:
+            imageObj = self.imageObjs[fileInd]
+            channels = [ch for ch in self.selectedChannels[self.selectedWindow] if ch<imageObj.shape[3]]
+            for ind,ch in enumerate(channels):
+                if imageObj.rgbInd[ch]!=(0,1,2):
+                    return False
+        return True
                    
     def openFile(self):
         filePaths,fileType = QtGui.QFileDialog.getOpenFileNamesAndFilter(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image (*.tif *.btf *.png *.jpg *.jp2);;Image Series (*.tif *.btf *.png *.jpg *.jp2);;Numpy Array (*.npy *.npz);;Allen Atlas (*.nrrd);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml)',self.fileOpenType)
@@ -771,8 +855,7 @@ class ImageGui():
         self.fileListbox.addItem(label)
         if len(self.imageObjs)>1:
             self.fileListbox.item(self.fileListbox.count()-1).setCheckState(QtCore.Qt.Unchecked)
-            if self.stitchCheckbox.isChecked():
-                self.stitchPos = np.concatenate((self.stitchPos,np.full((self.numWindows,1,3),np.nan)),axis=1)
+            self.stitchPos = np.concatenate((self.stitchPos,np.full((self.numWindows,1,3),np.nan)),axis=1)
         else:
             self.fileListbox.item(self.fileListbox.count()-1).setCheckState(QtCore.Qt.Checked)
             self.checkedFileIndex[self.selectedWindow] = [0]
@@ -914,8 +997,7 @@ class ImageGui():
             
     def convertImage(self):
         self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
-        sender = self.mainWin.sender()
-        dtype = np.uint8 if sender is self.imageMenuConvertTo8Bit else np.uint16
+        dtype = np.uint8 if self.mainWin.sender() is self.imageMenuConvertTo8Bit else np.uint16
         for fileInd in self.selectedFileIndex:
             if self.imageObjs[fileInd].dtype!=dtype:
                 self.imageObjs[fileInd].convertDataType()
@@ -929,6 +1011,22 @@ class ImageGui():
     def invertImage(self):
         for fileInd in self.selectedFileIndex:
             self.imageObjs[fileInd].invert()
+        if self.selectedWindow in self.getAffectedWindows():
+            self.displayImageLevels()
+            self.displayImage()
+            
+    def normalizeImage(self):
+        option = 'images' if self.mainWin.sender() is self.imageMenuNormImages else 'volume'
+        for fileInd in self.selectedFileIndex:
+            self.imageObjs[fileInd].normalize(option)
+        if self.selectedWindow in self.getAffectedWindows():
+            self.displayImageLevels()
+            self.displayImage()
+            
+    def changeBackground(self):
+        option = 'b2w' if self.mainWin.sender() is self.imageMenuBackgroundBtoW else 'w2b'
+        for fileInd in self.selectedFileIndex:
+            self.imageObjs[fileInd].changeBackground(option)
         if self.selectedWindow in self.getAffectedWindows():
             self.displayImageLevels()
             self.displayImage()
@@ -1009,10 +1107,35 @@ class ImageGui():
             self.imageObjs[f].flip(axis,imgAxis,imgInd)
         self.displayImage(self.getAffectedWindows())
         
-    def rotateImage90(self):
+    def rotateImage(self):
         self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
-        for fileInd in self.selectedFileIndex:
-            self.imageObjs[fileInd].rotate90()
+        sender = self.mainWin.sender()
+        imgAxis = self.imageShapeIndex[self.selectedWindow][2]
+        axes = self.imageShapeIndex[self.selectedWindow][:2]
+        if sender in (self.imageMenuRotate90C,self.imageMenuRotate90CC):
+            direction = -1 if sender is self.imageMenuRotate90C else 1
+            for fileInd in self.selectedFileIndex:
+                self.imageObjs[fileInd].rotate90(direction,axes)
+        else:
+            if sender is self.imageMenuRotateAngle:
+                angle,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Rotation Angle','degrees:',0,decimals=2)
+                if not ok or angle==0:
+                    return
+            else:
+                if  self.markedPoints[self.selectedWindow] is None or self.markedPoints[self.selectedWindow].shape[0]!=2:
+                    raise Exception('Two marked points are required for rotation to line')
+                pts = self.markedPoints[self.selectedWindow][:,axes]
+                dy,dx = pts[1]-pts[0]
+                angle = math.degrees(math.atan(dx/dy))
+                center = [(self.imageShape[self.selectedWindow][i]-1)/2 for i in axes]
+            if imgAxis in (1,2):
+                    angle *= -1
+            self.rotationAngle = angle
+            self.rotationAxes = axes
+            for fileInd in self.selectedFileIndex:
+                self.imageObjs[fileInd].rotate(angle,axes)
+            if len(self.selectedAtlasRegions[self.selectedWindow])>0:
+                self.rotateAnnotationData()
         affectedWindows = self.getAffectedWindows()
         if self.stitchCheckbox.isChecked():
             for window in affectedWindows:
@@ -1021,11 +1144,41 @@ class ImageGui():
         else:
             for window in affectedWindows:
                 self.imageShape[window] = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].shape[:3]
+            if sender is self.imageMenuRotateLine:
+                # translate points such that origin is center of rotation , rotate, then translate back to image origin
+                # ynew = -x*sin(a) + y*cos(a)
+                # xnew = x*cos(a) + y*sin(a)
+                a = math.radians(angle)
+                if imgAxis==0:
+                    a *= -1
+                p = pts-center
+                c = [(self.imageShape[self.selectedWindow][i]-1)/2 for i in axes]
+                pts[:,0] = -p[:,1]*math.sin(a)+p[:,0]*math.cos(a)+c[0]
+                pts[:,1] = p[:,1]*math.cos(a)+p[:,0]*math.sin(a)+c[1]
+                if self.sliceProjState[self.selectedWindow]:
+                    n = self.imageShape[self.selectedWindow][imgAxis]
+                    self.markedPoints[self.selectedWindow] = np.zeros((n*2,3))
+                    self.markedPoints[self.selectedWindow][::2,imgAxis] = np.arange(n)
+                    self.markedPoints[self.selectedWindow][::2,axes] = pts[0]
+                    self.markedPoints[self.selectedWindow][1::2,imgAxis] = np.arange(n)
+                    self.markedPoints[self.selectedWindow][1::2,axes] = pts[1]
+                else:
+                    self.markedPoints[self.selectedWindow][:,axes] = pts
+                self.fillPointsTable()
             self.setImageRange()
             self.displayImageRange()
             self.setViewBoxRangeLimits(affectedWindows)
             self.setViewBoxRange(affectedWindows)
         self.displayImage(affectedWindows)
+        
+    def saveOffsets(self):
+        if len(self.selectedFileIndex)>1:
+            raise Exception('Select a single image object to return its offsets')
+        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
+        if filePath=='':
+            return
+        offset = self.imageObjs[self.selectedFileIndex[0]].getOffsets()
+        np.save(filePath,offset)
         
     def clearLocalAdjustHistory(self):
         self.localAdjustHistory = [[] for _ in range(self.numWindows)]
@@ -1091,48 +1244,68 @@ class ImageGui():
         self.displayImage()
     
     def transformImage(self):
+        sender = self.mainWin.sender()
         self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
-        refWin = self.alignRefWindow[self.selectedWindow]
-        if refWin is None:
-            raise Exception('Image must be aligned to reference before transforming')
         axis = self.imageShapeIndex[self.selectedWindow][2]
-        sliceProjState = []
-        imageIndex = []
-        for window in (refWin,self.selectedWindow):
-            sliceProjState.append(self.sliceProjState[window])
-            imageIndex.append(self.imageIndex[window][axis])
-            self.sliceProjState[window] = 0
         rng = self.imageRange[self.selectedWindow][axis]
-        warpShape = tuple(self.imageShape[refWin][i] for i in self.imageShapeIndex[refWin][:2])+(rng[1]-rng[0]+1,)
+        if sender is self.imageMenuTransformAligned:
+            refWin = self.alignRefWindow[self.selectedWindow]
+            if refWin is None:
+                raise Exception('Image must be aligned to reference before transforming')
+            sliceProjState = []
+            imageIndex = []
+            for window in (refWin,self.selectedWindow):
+                sliceProjState.append(self.sliceProjState[window])
+                imageIndex.append(self.imageIndex[window][axis])
+                self.sliceProjState[window] = 0
+            self.transformShape = tuple(self.imageShape[refWin][i] for i in self.imageShapeIndex[refWin][:2])+(rng[1]-rng[0]+1,)
+            self.transformMatrix = np.zeros((rng[1]-rng[0]+1,2,3),dtype=np.float32)
+        else:
+            filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npz')
+            if filePath=='':
+                return
+            self.fileOpenPath = os.path.dirname(filePath)
+            transformData = np.load(filePath)
+            self.transformShape = tuple(transformData['transformShape'])
+            self.transformMatrix = transformData['transformMatrix']
         for fileInd in self.checkedFileIndex[self.selectedWindow]:
             dataIter = self.imageObjs[fileInd].getDataIterator(rangeSlice=slice(rng[0],rng[1]+1))
-            warpData = np.zeros(warpShape+(self.imageObjs[fileInd].shape[3],),dtype=self.imageObjs[fileInd].dtype)
+            warpData = np.zeros(self.transformShape+(self.imageObjs[fileInd].shape[3],),dtype=self.imageObjs[fileInd].dtype)
             for ind,imgInd in enumerate(range(rng[0],rng[1]+1)):
-                mask = []
-                for window in (refWin,self.selectedWindow):
-                    if window==refWin:
-                        self.imageIndex[window][axis] = self.getAlignedRefImageIndex(self.selectedWindow,imgInd)
-                    else:
-                        self.imageIndex[window][axis] = imgInd
-                    image = self.getImage(window,binary=True).max(axis=2)
-                    _,contours,_ = cv2.findContours(image,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-                    mask.append(np.zeros(image.shape,dtype=np.uint8))
-                    cv2.drawContours(mask[-1],contours,-1,1,-1)                    
-                _,warpMatrix = cv2.findTransformECC(mask[1],mask[0],np.eye(2,3,dtype=np.float32),cv2.MOTION_AFFINE)
+                if sender is self.imageMenuTransformAligned:
+                    mask = []
+                    for window in (refWin,self.selectedWindow):
+                        if window==refWin:
+                            self.imageIndex[window][axis] = self.getAlignedRefImageIndex(self.selectedWindow,imgInd)
+                        else:
+                            self.imageIndex[window][axis] = imgInd
+                        image = self.getImage(window,binary=True).max(axis=2)
+                        _,contours,_ = cv2.findContours(image,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+                        mask.append(np.zeros(image.shape,dtype=np.uint8))
+                        cv2.drawContours(mask[-1],contours,-1,1,-1)                    
+                    _,self.transformMatrix[ind] = cv2.findTransformECC(mask[1],mask[0],np.eye(2,3,dtype=np.float32),cv2.MOTION_AFFINE)
                 for ch in range(warpData.shape[3]):
-                    warpData[:,:,ind,ch] = cv2.warpAffine(next(dataIter),warpMatrix,warpShape[1::-1],flags=cv2.INTER_LINEAR)
+                    warpData[:,:,ind,ch] = cv2.warpAffine(next(dataIter),self.transformMatrix[ind],self.transformShape[1::-1],flags=cv2.INTER_LINEAR)
             self.imageObjs[fileInd].data = warpData
             self.imageObjs[fileInd].shape = warpData.shape
-        for ind,window in enumerate((refWin,self.selectedWindow)):
-            self.sliceProjState[window] = sliceProjState[ind]
-            self.imageIndex[window][axis] = imageIndex[ind]
-        self.imageIndex[self.selectedWindow][axis] -= rng[0]
-        self.alignIndex[self.selectedWindow][self.alignIndex[self.selectedWindow]>=0] -= rng[0]
-        self.imageShape[self.selectedWindow] = warpShape
+        if sender is self.imageMenuTransformAligned:
+            for ind,window in enumerate((refWin,self.selectedWindow)):
+                self.sliceProjState[window] = sliceProjState[ind]
+                self.imageIndex[window][axis] = imageIndex[ind]
+            self.imageIndex[self.selectedWindow][axis] -= rng[0]
+            self.alignIndex[self.selectedWindow][self.alignIndex[self.selectedWindow]>=0] -= rng[0]
+        self.imageShape[self.selectedWindow] = self.transformShape
         self.setImageRange()
         self.setViewBoxRangeLimits()
         self.displayImageInfo()
         self.displayImage()
+        
+    def saveTransformMatrix(self):
+        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npz')
+        if filePath=='':
+            return
+        self.fileSavePath = os.path.dirname(filePath)
+        np.savez(filePath,transformShape=np.array(self.transformShape),transformMatrix=self.transformMatrix)
         
     def warpImage(self):
         refWin = self.alignRefWindow[self.selectedWindow]
@@ -1317,7 +1490,7 @@ class ImageGui():
         for fileInd in self.checkedFileIndex[window]:
             imageObj = self.imageObjs[fileInd]
             if self.stitchState[window]:
-                i,j = (slice(self.stitchPos[window,fileInd,i]//downsample,self.stitchPos[window,fileInd,i]+int(math.ceil(imageObj.shape[i])/downsample)) for i in self.imageShapeIndex[window][:2])
+                i,j = (slice(int(self.stitchPos[window,fileInd,i]//downsample),int(self.stitchPos[window,fileInd,i]+math.ceil(imageObj.shape[i])/downsample)) for i in self.imageShapeIndex[window][:2])
             else:
                 i,j = (slice(0,int(math.ceil(imageObj.shape[i]/downsample))) for i in self.imageShapeIndex[window][:2])
             channels = [ch for ch in self.selectedChannels[window] if ch<imageObj.shape[3]]
@@ -1330,7 +1503,7 @@ class ImageGui():
                         image *= 1-imageObj.alpha
                 for ind,ch in enumerate(channels):
                     for k in imageObj.rgbInd[ch]:
-                        if self.stitchState[window]:
+                        if self.stitchState[window] and self.imageMenuStitchOverlayMax.isChecked():
                             image[i,j,k] = np.maximum(image[i,j,k],data[:,:,ind],out=image[i,j,k])
                         elif imageObj.alpha<1 or alphaMap is not None:
                             image[i,j,k] += data[:,:,ind]
@@ -1361,7 +1534,7 @@ class ImageGui():
             if i<0:
                 return None,None
             if self.stitchState[window]:
-                i -= self.stitchPos[window,fileInd,axis]
+                i -= int(self.stitchPos[window,fileInd,axis])
                 if not 0<=i<imageObj.shape[axis]:
                     return None,None
             rangeSlice = slice(i,i+1)
@@ -1439,10 +1612,15 @@ class ImageGui():
             a = self.atlasAnnotationData[:,ind,:]
         else:
             a = self.atlasAnnotationData.transpose((0,2,1))[ind,:,:]
-        a = np.in1d(a,regionID).reshape(a.shape)
+        mask = np.in1d(a,regionID).reshape(a.shape)
         if isProj:
-            a = a.max(axis=axis)
-        return a[::downsample,::downsample]
+            mask = mask.max(axis=axis)
+        mask = mask[::downsample,::downsample]
+        if self.atlasMenuHemiLeft.isChecked():
+            mask[:,mask.shape[1]//2:] = 0
+        elif self.atlasMenuHemiRight.isChecked():
+            mask[:,:mask.shape[1]//2] = 0
+        return mask
         
     def getAtlasRegionID(self,regionLabel):
         for structure in self.atlasAnnotationRegions.getElementsByTagName('structure'):
@@ -1487,25 +1665,46 @@ class ImageGui():
                 self.selectedAtlasRegions[window] = []
             self.displayImage(windows)
             
+    def setAtlasHemi(self):
+        sender = self.mainWin.sender()
+        for option in (self.atlasMenuHemiBoth,self.atlasMenuHemiLeft,self.atlasMenuHemiRight):
+            option.setChecked(option is sender)
+        for window in self.displayedWindows:
+            if len(self.selectedAtlasRegions[window])>0:
+                self.displayImage([window])
+            
+    def rotateAnnotationData(self):
+        if self.atlasAnnotationData is not None:
+            self.atlasAnnotationData = scipy.ndimage.interpolation.rotate(self.atlasAnnotationData,self.rotationAngle,self.rotationAxes,order=0)
+            
     def resetAnnotationData(self):
+        self.clearAtlasRegions()
         self.atlasAnnotationData = self.atlasAnnotationRegions = None
                 
     def normRegionLevels(self):
         if len(self.selectedAtlasRegions[self.selectedWindow])>0:
-            a = np.in1d(self.atlasAnnotationData,self.selectedAtlasRegionIDs[self.selectedWindow][0]).reshape(self.atlasAnnotationData.shape)
+            mask = np.in1d(self.atlasAnnotationData,self.selectedAtlasRegionIDs[self.selectedWindow][0]).reshape(self.atlasAnnotationData.shape)
+            if self.atlasMenuHemiLeft.isChecked():
+                mask[:,mask.shape[1]//2:] = 0
+            elif self.atlasMenuHemiRight.isChecked():
+                mask[:,:mask.shape[1]//2] = 0
             for fileInd in set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex):
                 for ch in range(self.imageObjs[fileInd].shape[3]):
-                    self.imageObjs[fileInd].levels[ch][1] = self.imageObjs[fileInd].data[:,:,:,ch][a].max()
+                    self.imageObjs[fileInd].levels[ch][1] = self.imageObjs[fileInd].data[:,:,:,ch][mask].max()
             self.displayImageLevels()
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
             self.displayImage(windows)
         
     def setOutsideRegionZero(self):
         if len(self.selectedAtlasRegions[self.selectedWindow])>0:
-            a = np.logical_not(np.in1d(self.atlasAnnotationData,self.selectedAtlasRegionIDs[self.selectedWindow][0]).reshape(self.atlasAnnotationData.shape))
+            mask = np.logical_not(np.in1d(self.atlasAnnotationData,self.selectedAtlasRegionIDs[self.selectedWindow][0]).reshape(self.atlasAnnotationData.shape))
+            if self.atlasMenuHemiLeft.isChecked():
+                mask[:,mask.shape[1]//2:] = 1
+            elif self.atlasMenuHemiRight.isChecked():
+                mask[:,:mask.shape[1]//2] = 1
             for fileInd in set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex):
                 for ch in range(self.imageObjs[fileInd].shape[3]):
-                    self.imageObjs[fileInd].data[:,:,:,ch][a] = 0
+                    self.imageObjs[fileInd].data[:,:,:,ch][mask] = 0
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
             self.displayImage(windows)
         
@@ -1549,7 +1748,7 @@ class ImageGui():
             if key in moveKeys:
                 windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
                 fileInd = list(set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex))
-                moveAxis,moveDist = self.getMoveParams(self.selectedWindow,key,modifiers)
+                moveAxis,moveDist = self.getMoveParams(self.selectedWindow,key,modifiers,flipVert=True)
                 self.stitchPos[windows,fileInd,moveAxis] += moveDist
                 self.updateStitchShape(windows)
                 self.displayImage(windows)
@@ -1564,7 +1763,7 @@ class ImageGui():
             if key in (QtCore.Qt.Key_0,QtCore.Qt.Key_1)+moveKeys:
                 axis = self.imageShapeIndex[self.selectedWindow][2]
                 imgInd = self.imageIndex[self.selectedWindow][axis]
-                rows = np.where(self.markedPoints[self.selectedWindow][:,axis]==imgInd)[0]
+                rows = np.where(self.markedPoints[self.selectedWindow][:,axis].round()==imgInd)[0]
                 if rows.size>2:
                     pts = self.markedPoints[self.selectedWindow][rows]
                     shape = tuple(self.imageShape[self.selectedWindow][i] for i in self.imageShapeIndex[self.selectedWindow][:2])
@@ -1738,14 +1937,14 @@ class ImageGui():
                 self.windowListbox.setCurrentRow(window)
         elif event.button()==QtCore.Qt.RightButton and self.markedPoints[window] is not None:
             axis = self.imageShapeIndex[window][2]
-            rows = np.where(self.markedPoints[window][:,axis]==self.imageIndex[window][axis])[0]
+            rows = np.where(self.markedPoints[window][:,axis].round()==self.imageIndex[window][axis])[0]
             if len(rows)>0:
                 self.selectedPoint = rows[np.argmin(np.sum(np.absolute(self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]]-[y,x]),axis=1))]
         
     def imageDoubleClickCallback(self,event,window):
         if self.analysisMenuPointsLock.isChecked():
             return
-        x,y = event.pos().x(),event.pos().y()
+        x,y = (p*self.displayDownsample[window] for p in (event.pos().x(),event.pos().y()))
         newPoint = np.array([y,x,self.imageIndex[window][self.imageShapeIndex[window][2]]])[list(self.imageShapeIndex[window])]
         windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [window]
         for window in windows:
@@ -1857,8 +2056,10 @@ class ImageGui():
                     checked.remove(fileInd)
             self.imageObjs.remove(self.imageObjs[fileInd])
             self.fileListbox.takeItem(fileInd)
+        self.stitchPos = np.delete(self.stitchPos,self.selectedFileIndex,axis=1)
+        if self.stitchPos.shape[1]<1:
+            self.stitchPos = np.full((self.numWindows,1,3),np.nan)
         if self.stitchCheckbox.isChecked():
-            self.stitchPos = np.delete(self.stitchPos,self.selectedFileIndex,axis=1)
             self.updateStitchShape(windows)
         self.selectedFileIndex = []
         for window in windows:
@@ -1873,6 +2074,34 @@ class ImageGui():
                     self.updateChannelList()
                     self.displayImageLevels()
                 self.displayImage([window])
+                
+    def setStitchOverlayMode(self):
+        sender = self.mainWin.sender()
+        for option in (self.imageMenuStitchOverlayMax,self.imageMenuStitchOverlayReplace):
+            option.setChecked(option is sender)
+        if self.stitchCheckbox.isChecked():
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+            self.displayImage(windows)
+            
+    def setStitchTileMode(self):
+        sender = self.mainWin.sender()
+        for option in (self.imageMenuStitchTileXY,self.imageMenuStitchTileZ):
+            option.setChecked(option is sender)
+            
+    def loadStitchPositions(self):
+        filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npy')
+        if filePath=='':
+            return
+        self.fileOpenPath = os.path.dirname(filePath)
+        self.stitchPos[self.selectedWindow] = np.load(filePath)
+        self.initStitch()
+    
+    def saveStitchPositions(self):
+        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
+        if filePath=='':
+            return
+        self.fileSavePath = os.path.dirname(filePath)
+        np.save(filePath,self.stitchPos[self.selectedWindow])
             
     def stitchCheckboxCallback(self):
         if self.stitchCheckbox.isChecked():
@@ -1880,7 +2109,6 @@ class ImageGui():
                 if not (self.viewChannelsCheckbox.isChecked or self.view3dCheckbox.isChecked()):
                     self.stitchCheckbox.setChecked(False)
                     raise Exception('Stitching can not be initiated while link windows mode is on unless channel view or view 3D is selected')
-                windows = self.displayedWindows
             elif len(self.selectedFileIndex)<1:
                 self.stitchCheckbox.setChecked(False)
                 return
@@ -1891,31 +2119,26 @@ class ImageGui():
                     else:
                         self.fileListbox.item(i).setCheckState(QtCore.Qt.Unchecked)
                 self.checkedFileIndex[self.selectedWindow] = self.selectedFileIndex[:]
-                windows = [self.selectedWindow]
             self.stitchPos[self.selectedWindow] = np.nan
             useStagePos = all([self.imageObjs[i].position is not None for i in self.selectedFileIndex])
-            col = 0
             pos = [0,0,0]
+            n = 0
             for i in self.selectedFileIndex:
                 if useStagePos:
                     self.stitchPos[self.selectedWindow,i,:] = self.imageObjs[i].position
                 else:
-                    if col>math.floor(len(self.selectedFileIndex)**0.5):
-                        col = 0
-                        pos[0] += self.imageObjs[i].shape[0]
-                        pos[1] = 0
-                    elif col>0:
-                        pos[1] += self.imageObjs[i].shape[1]
-                    col += 1
+                    if self.imageMenuStitchTileXY.isChecked():
+                        if n>math.floor(len(self.selectedFileIndex)**0.5):
+                            n = 0
+                            pos[0] += self.imageObjs[i].shape[0]
+                            pos[1] = 0
+                        elif n>0:
+                            pos[1] += self.imageObjs[i].shape[1]
+                    elif n>1:
+                        pos[2] = n-1
+                    n += 1    
                     self.stitchPos[self.selectedWindow,i,:] = pos
-            for window in windows:
-                self.stitchState[window] = True
-                self.holdStitchRange[window] = False
-                if window!=self.selectedWindow:
-                    self.stitchPos[window] = self.stitchPos[self.selectedWindow]
-            self.updateStitchShape(windows)
-            self.displayImageLevels()
-            self.displayImage(windows)
+            self.initStitch()
         else:
             self.stitchState[self.selectedWindow] = False
             if len(self.checkedFileIndex[self.selectedWindow])>1:
@@ -1930,6 +2153,18 @@ class ImageGui():
                     self.setView3dOn()
             else:
                 self.initImageWindow()
+                
+    def initStitch(self):
+        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+        for window in windows:
+            self.stitchState[window] = True
+            self.holdStitchRange[window] = False
+            if window!=self.selectedWindow:
+                self.stitchPos[window] = self.stitchPos[self.selectedWindow]
+        self.updateStitchShape(windows)
+        self.updateChannelList()
+        self.displayImageLevels()
+        self.displayImage(windows)
     
     def updateStitchShape(self,windows=None):
         if windows is None:
@@ -1937,7 +2172,7 @@ class ImageGui():
         for window in windows:
             self.stitchPos[window] -= np.nanmin(self.stitchPos[window],axis=0)
             tileShapes = np.array([self.imageObjs[i].shape[:3] for i in self.checkedFileIndex[window]])
-            self.imageShape[window] = (self.stitchPos[self.selectedWindow,self.checkedFileIndex[window],:]+tileShapes).max(axis=0)
+            self.imageShape[window] = (self.stitchPos[self.selectedWindow,self.checkedFileIndex[window],:]+tileShapes).max(axis=0).astype(int)
             if self.holdStitchRange[window]:
                 for axis in (0,1,2):
                     if self.imageRange[window][axis][1]>=self.imageShape[window][axis]-1:
@@ -2157,7 +2392,7 @@ class ImageGui():
             self.normState[window] = self.normState[self.selectedWindow]
             self.showBinaryState[window] = self.showBinaryState[self.selectedWindow]
             self.stitchState[window] = self.stitchState[self.selectedWindow]
-            self.selectedAtlasRegions[window] = self.selectedAtlasRegions[self.selectedWindows]
+            self.selectedAtlasRegions[window] = self.selectedAtlasRegions[self.selectedWindow]
             self.selectedAtlasRegionIDs[window] = self.selectedAtlasRegionIDs[self.selectedWindow]
             self.markedPoints[window] = self.markedPoints[self.selectedWindow]
         if self.stitchState[self.selectedWindow]:
@@ -2451,9 +2686,10 @@ class ImageGui():
             else:
                 axis = self.imageShapeIndex[window][2]
                 rng = self.imageRange[window][axis] if self.sliceProjState[window] else [self.imageIndex[window][axis]]*2
-                rows = np.logical_and(self.markedPoints[window][:,axis]>=rng[0],self.markedPoints[window][:,axis]<=rng[1])
+                ind = self.markedPoints[window][:,axis].round()
+                rows = np.logical_and(ind>=rng[0],ind<=rng[1])
                 if any(rows):
-                    y,x = self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]].T
+                    y,x = self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]].T/self.displayDownsample[window]
                     if self.analysisMenuPointsLinePoly.isChecked():
                         x = np.append(x,x[0])
                         y = np.append(y,y[0])
@@ -2467,8 +2703,8 @@ class ImageGui():
         if self.markedPoints[self.selectedWindow] is not None:
             numPts = self.markedPoints[self.selectedWindow].shape[0]
             if append:
-                numCols = self.markPointsTable.rowCount()
-                firstRow = 0 if numCols==1 else numCols
+                numRows = self.markPointsTable.rowCount()
+                firstRow = 0 if numRows==1 else numRows
                 rows = range(firstRow,numPts)
                 for row in rows:
                     if row>0:
@@ -2520,7 +2756,8 @@ class ImageGui():
         shapeIndex = self.imageShapeIndex[self.selectedWindow]
         axis = shapeIndex[2]
         rng = self.imageRange[self.selectedWindow][axis] if self.sliceProjState[self.selectedWindow] else [self.imageIndex[self.selectedWindow][axis]]*2
-        rows = np.logical_and(self.markedPoints[self.selectedWindow][:,axis]>=rng[0],self.markedPoints[self.selectedWindow][:,axis]<=rng[1])
+        ind = self.markedPoints[self.selectedWindow][:,axis].round()
+        rows = np.logical_and(ind>=rng[0],ind<=rng[1])
         if not any(rows):
             return
         image = self.getImage()
@@ -2553,7 +2790,7 @@ class ImageGui():
             ind -= 1
         elif sender==self.analysisMenuPointsCopyNext:
             ind += 1
-        rows = self.markedPoints[self.selectedWindow][:,axis]==ind
+        rows = self.markedPoints[self.selectedWindow][:,axis].round()==ind
         if not any(rows):
             return
         pts = self.markedPoints[self.selectedWindow][rows].copy()
@@ -2629,7 +2866,7 @@ class ImageGui():
             if self.markedPoints[self.selectedWindow] is None:
                 self.markedPoints[self.selectedWindow] = pts
             else:
-                rows = self.markedPoints[self.selectedWindow][:,axis]!=imgInd
+                rows = self.markedPoints[self.selectedWindow][:,axis].round()!=imgInd
                 self.markedPoints[self.selectedWindow] = np.concatenate((self.markedPoints[self.selectedWindow][rows],pts))
         self.fillPointsTable()
         self.plotMarkedPoints()
@@ -2778,11 +3015,12 @@ class ImageObj():
             for ind,f in enumerate(filePath):
                 dtype,s,n = getImageInfo(f)
                 if ind==0:
+                    if numCh is None:
+                        numCh = n
                     self.fileType = 'bigtiff' if f[-4:]=='.btf' else 'image'
-                    self.filePath = [[] for _ in range(n)]
+                    self.filePath = [[] for _ in range(numCh)]
                     self.dtype = dtype
                     shape = s
-                    numCh = n
                 else:
                     if (self.fileType=='bitfiff' and f[-4:]!='.btf') or (self.fileType=='image' and f[-4:]=='.btf'):
                         raise Exception('All image files in series must be .btf if any are .btf')
@@ -2864,6 +3102,13 @@ class ImageObj():
         else:
             self.data = self.formatData(self.data)
             
+    def getOffsets(self):
+        offset = np.zeros((self.shape[2],2),dtype=int)
+        for img in range(self.shape[2]):
+            imgShape = getImageInfo(self.filePath[0][img])[1]
+            offset[img] = [(self.shape[n]-imgShape[n])//2 for n in (0,1)]
+        return offset
+            
     def getData(self,channels=None,rangeSlice=None):
         # returns array with shape height x width x n x channels
         if channels is None:
@@ -2910,11 +3155,16 @@ class ImageObj():
             for ch in channels:
                 if data is None:
                     imgData = getImageData(self.filePath[ch][img],self.memmap)
-                    numCh = 1 if len(imgData.shape)<3 else imgData.shape[2]
-                    d = np.zeros(self.shape[:2]+(numCh,),dtype=self.dtype)
+                    if len(imgData.shape)<3:
+                        numCh = 1
+                        dshape = self.shape[:2]
+                    else:
+                        numCh = imgData.shape[2]
+                        dshape = self.shape[:2]+(numCh,)
+                    d = np.zeros(dshape,dtype=self.dtype)
                     i = (self.shape[0]-imgData.shape[0])//2
                     j = (self.shape[1]-imgData.shape[1])//2
-                    d[i:i+imgData.shape[0],j:j+imgData.shape[1],:] = imgData
+                    d[i:i+imgData.shape[0],j:j+imgData.shape[1]] = imgData
                     if numCh>1:
                         for c in channels:
                             yield d[:,:,c]
@@ -2962,6 +3212,36 @@ class ImageObj():
             levelsMax = 2**self.bitDepth-1
             self.data = levelsMax - self.data
             self.levels = [[levelsMax-level for level in reversed(levels)] for levels in self.levels]
+            
+    def normalize(self,option):
+        if self.data is None:
+            pass
+        else:
+            data = self.data.astype(float)
+            if option=='images':
+                for i in range(data.shape[2]):
+                    for ch in range(data.shape[3]):
+                        dmin = self.data[:,:,i,ch].min()
+                        dmax = self.data[:,:,i,ch].max()
+                        data[:,:,i,ch] -= dmin 
+                        data[:,:,i,ch] /= (dmax-dmin)/(2**self.bitDepth-1)
+            else:
+                for ch in range(data.shape[3]):
+                    dmin = self.data[:,:,:,ch].min()
+                    dmax = self.data[:,:,:,ch].max()
+                    data[:,:,:,ch] -= dmin 
+                    data[:,:,:,ch] /= (dmax-dmin)/(2**self.bitDepth-1)
+            self.data = data.astype(self.dtype)
+            self.levels = [[0,2**self.bitDepth-1] for _ in range(self.shape[3])]
+            
+    def changeBackground(self,option):
+        if self.data is None:
+            pass
+        else:
+            old,new = 0,2**self.bitDepth-1
+            if option=='w2b':
+                old,new = new,old
+            self.data[np.all(self.data==old,axis=3)] = new
         
     def flip(self,axis,imgAxis=None,imgInd=None):
         if self.data is None:
@@ -2976,12 +3256,19 @@ class ImageObj():
             flipInd[axis] = slice(None,None,-1)
             self.data[ind] = self.data[flipInd]
         
-    def rotate90(self):
+    def rotate90(self,direction,axes):
         if self.data is None:
             pass
         else:
-            self.data = np.rot90(self.data)
-            self.shape = tuple(self.shape[i] for i in (1,0,2,3))
+            self.data = np.rot90(self.data,direction,axes)
+            self.shape = self.data.shape
+            
+    def rotate(self,angle,axes):
+        if self.data is None:
+            pass
+        else:
+            self.data = scipy.ndimage.interpolation.rotate(self.data,angle,axes)
+            self.shape = self.data.shape
 
 
 def getImageInfo(filePath):
@@ -2993,20 +3280,32 @@ def getImageInfo(filePath):
             numCh = shape[2]
             shape = shape[:2]
         else:
-            numCh = len(img.pages)
+            # numCh = len(img.pages)
+            numCh = sum(1 for p in img.pages if p.shape==shape)
+        img.close()
+    elif filePath[-4:]=='.png':
+        img = png.Reader(filePath).read()
+        dtype = np.uint16 if img[3]['bitdepth']==16 else np.uint8
+        shape = img[1::-1]
+        numCh = img[3]['planes']
     else:
         img = PIL.Image.open(filePath)
-        dtype = np.uint16 if img.mode=='I;16' or img.decodermaxblock==2**16 else np.uint8
+        if hasattr(img,'bits'):
+            dtype = np.uint16 if img.bits==16 else np.uint8
+        elif img.mode=='I;16':
+            dtype = np.uint16
+        else:
+            dtype = np.uint16 if cv2.imread(filePath,cv2.IMREAD_UNCHANGED).dtype==np.uint16 else np.uint8
         shape = img.size[::-1]
         numCh = 3 if img.mode=='RGB' else 1
-    img.close()
+        img.close()
     return dtype,shape,numCh
 
 def getImageData(filePath,memmap=False):
     if filePath[-4:] in ('.tif','.btf'):
         img = tifffile.TiffFile(filePath)
         data = img.asarray(memmap=memmap)
-        if len(img.pages)>1:
+        if len(img.pages)>1 and len(data.shape)>2:
             data = data.transpose((1,2,0))[:,:,::-1]
         img.close()
     else:
@@ -3016,7 +3315,7 @@ def getImageData(filePath,memmap=False):
     return data
     
 def applyLUT(data,levels,binary=False,gamma=1):
-    dtype,maxVal = (np.uint8,2**8-1) if binary or data.dtype==np.uint8 else (1**16-1,np.uint16)
+    dtype,maxVal = (np.uint8,2**8-1) if binary or data.dtype==np.uint8 else (np.uint16,2**16-1)
     if binary:
         levels = [levels[1]-1,levels]
     lut = np.arange(maxVal+1)
