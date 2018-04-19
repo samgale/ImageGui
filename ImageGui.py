@@ -22,6 +22,9 @@ import numpy as np
 import scipy.io, scipy.interpolate, scipy.ndimage
 from PyQt4 import QtGui, QtCore
 import pyqtgraph as pg
+from matplotlib import pyplot as plt
+import matplotlib as mpl
+mpl.rcParams['pdf.fonttype'] = 42
 
 
 def start(data=None,label=None,autoColor=False,mode=None):
@@ -130,6 +133,10 @@ class ImageGui():
         self.fileMenuSaveVolumeMat = QtGui.QAction('mat',self.mainWin)
         self.fileMenuSaveVolumeMat.triggered.connect(self.saveVolume)
         self.fileMenuSaveVolume.addActions([self.fileMenuSaveVolumeImages,self.fileMenuSaveVolumeMovie,self.fileMenuSaveVolumeNpz,self.fileMenuSaveVolumeMat])
+        
+        self.fileMenuPlot = QtGui.QAction('Plot',self.mainWin)
+        self.fileMenuPlot.triggered.connect(self.plotImage)
+        self.fileMenu.addAction(self.fileMenuPlot)
         
         # options menu
         self.optionsMenu = self.menuBar.addMenu('Options')
@@ -737,7 +744,30 @@ class ImageGui():
             self.contourLineColor = color
         elif sender is self.optionsMenuSetColorAtlas:
             self.atlasLineColor = color
-        
+            
+    def plotImage(self):
+        plt.figure(facecolor='w')
+        ax = plt.subplot(1,1,1)
+        ax.imshow(self.getImage(atlas=False),interpolation='none')
+        if len(self.selectedAtlasRegions[self.selectedWindow])>0:
+            for regionID in self.selectedAtlasRegionIDs[self.selectedWindow]:
+                contours = self.getAtlasRegionContours(self.selectedWindow,regionID)
+                for c in contours:
+                    x,y = np.squeeze(c).T
+                    ax.plot(np.append(x,x[0]),np.append(y,y[0]),'-',color=self.atlasLineColor)
+        x,y = self.getPlotPoints(self.selectedWindow)
+        if len(x)>0:
+            plotStyle = 'o' if self.analysisMenuPointsLineNone.isChecked() else 'o-'
+            ax.plot(x,y,plotStyle,color=self.markPointsColor,markeredgecolor=self.markPointsColor,markerfacecolor='none',markersize=self.markPointsSize)
+        yRange,xRange = [self.imageRange[self.selectedWindow][axis] for axis in self.imageShapeIndex[self.selectedWindow][:2]]
+        ax.set_xlim([xRange[0]-0.5,xRange[1]+0.5])
+        ax.set_ylim([yRange[1]+0.5,yRange[0]-0.5,])
+        ax.set_xticks([])
+        ax.set_yticks([])
+        plt.axis('off')
+        plt.tight_layout()
+        plt.show()
+    
     def saveImage(self):
         filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'Image (*.tif  *png *.jpg)')
         if filePath=='':
@@ -1024,9 +1054,12 @@ class ImageGui():
             self.displayImage()
             
     def changeBackground(self):
+        thresh,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Set Threshold','fraction above/below min/max:',0,min=0,max=1,decimals=3)
+        if not ok:
+            return
         option = 'b2w' if self.mainWin.sender() is self.imageMenuBackgroundBtoW else 'w2b'
         for fileInd in self.selectedFileIndex:
-            self.imageObjs[fileInd].changeBackground(option)
+            self.imageObjs[fileInd].changeBackground(option,thresh)
         if self.selectedWindow in self.getAffectedWindows():
             self.displayImageLevels()
             self.displayImage()
@@ -1480,7 +1513,7 @@ class ImageGui():
                 self.updateLevelsPlot(np.histogram(image,np.arange(self.levelsMax[window]+2))[0])
         self.plotMarkedPoints(windows)
         
-    def getImage(self,window=None,downsample=1,binary=False):
+    def getImage(self,window=None,downsample=1,binary=False,atlas=True):
         if window is None:
             window = self.selectedWindow
         if self.showBinaryState[window]:
@@ -1516,10 +1549,10 @@ class ImageGui():
             image /= (levels[1]-levels[0])/self.levelsMax[window]
         dtype = np.uint8 if self.levelsMax[window]==255 or binary else np.uint16
         image = image.astype(dtype)
-        if len(self.selectedAtlasRegions[window])>0:
+        if atlas and len(self.selectedAtlasRegions[window])>0:
             color = tuple(self.levelsMax[window]*c for c in self.atlasLineColor)
             for regionID in self.selectedAtlasRegionIDs[window]:
-                _,contours,_ = cv2.findContours(self.getAtlasRegionMask(window,regionID,downsample).copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+                contours = self.getAtlasRegionContours(window,regionID,downsample)
                 cv2.drawContours(image,contours,-1,color,1,cv2.LINE_AA)
         return image
                     
@@ -1594,7 +1627,7 @@ class ImageGui():
             data *= imageObj.alpha
         return data,alphaMap
         
-    def getAtlasRegionMask(self,window,regionID,downsample=1):
+    def getAtlasRegionContours(self,window,regionID,downsample=1):
         isProj = self.sliceProjState[window]
         axis = self.imageShapeIndex[window][2]
         if isProj:
@@ -1620,7 +1653,8 @@ class ImageGui():
             mask[:,mask.shape[1]//2:] = 0
         elif self.atlasMenuHemiRight.isChecked():
             mask[:,:mask.shape[1]//2] = 0
-        return mask
+        _,contours,_ = cv2.findContours(mask.copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+        return contours
         
     def getAtlasRegionID(self,regionLabel):
         for structure in self.atlasAnnotationRegions.getElementsByTagName('structure'):
@@ -2681,23 +2715,24 @@ class ImageGui():
         if windows is None:
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow] 
         for window in windows:
-            if self.markedPoints[window] is None:
-                x = y = []
-            else:
-                axis = self.imageShapeIndex[window][2]
-                rng = self.imageRange[window][axis] if self.sliceProjState[window] else [self.imageIndex[window][axis]]*2
-                ind = self.markedPoints[window][:,axis].round()
-                rows = np.logical_and(ind>=rng[0],ind<=rng[1])
-                if any(rows):
-                    y,x = self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]].T/self.displayDownsample[window]
-                    if self.analysisMenuPointsLinePoly.isChecked():
-                        x = np.append(x,x[0])
-                        y = np.append(y,y[0])
-                else:
-                    x = y = []
+            x,y = self.getPlotPoints(window)
             color = tuple(255*c for c in self.markPointsColor)
             pen = None if self.analysisMenuPointsLineNone.isChecked() else color
             self.markPointsPlot[window].setData(x=x,y=y,pen=pen,symbolSize=self.markPointsSize,symbolPen=color)
+            
+    def getPlotPoints(self,window):
+        x = y = []
+        if self.markedPoints[window] is not None:
+            axis = self.imageShapeIndex[window][2]
+            rng = self.imageRange[window][axis] if self.sliceProjState[window] else [self.imageIndex[window][axis]]*2
+            ind = self.markedPoints[window][:,axis].round()
+            rows = np.logical_and(ind>=rng[0],ind<=rng[1])
+            if any(rows):
+                y,x = self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]].T/self.displayDownsample[window]
+                if self.analysisMenuPointsLinePoly.isChecked():
+                    x = np.append(x,x[0])
+                    y = np.append(y,y[0])
+        return x,y
         
     def fillPointsTable(self,append=False):
         if self.markedPoints[self.selectedWindow] is not None:
@@ -3234,14 +3269,15 @@ class ImageObj():
             self.data = data.astype(self.dtype)
             self.levels = [[0,2**self.bitDepth-1] for _ in range(self.shape[3])]
             
-    def changeBackground(self,option):
+    def changeBackground(self,option,thresh):
         if self.data is None:
             pass
         else:
-            old,new = 0,2**self.bitDepth-1
-            if option=='w2b':
-                old,new = new,old
-            self.data[np.all(self.data==old,axis=3)] = new
+            maxLevel = 2**self.bitDepth-1
+            if option=='b2w':
+                self.data[np.all(self.data<=maxLevel*thresh,axis=3)] = maxLevel
+            else:
+                self.data[np.all(self.data>=maxLevel*(1-thresh),axis=3)] = 0
         
     def flip(self,axis,imgAxis=None,imgInd=None):
         if self.data is None:
@@ -3284,7 +3320,7 @@ def getImageInfo(filePath):
             numCh = sum(1 for p in img.pages if p.shape==shape)
         img.close()
     elif filePath[-4:]=='.png':
-        img = png.Reader(filePath).read()
+        img = png.Reader(str(filePath)).read()
         dtype = np.uint16 if img[3]['bitdepth']==16 else np.uint8
         shape = img[1::-1]
         numCh = img[3]['planes']
