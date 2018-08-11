@@ -16,7 +16,7 @@ from __future__ import division
 import sip
 sip.setapi('QString', 2)
 import math, os, time, zipfile
-import cv2, nrrd, PIL, png, tifffile
+import cv2, nibabel, nrrd, PIL, png, tifffile
 from xml.dom import minidom
 import numpy as np
 import scipy.io, scipy.interpolate, scipy.ndimage
@@ -838,7 +838,7 @@ class ImageGui():
         return True
                    
     def openFile(self):
-        filePaths,fileType = QtGui.QFileDialog.getOpenFileNamesAndFilter(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image (*.tif *.btf *.png *.jpg *.jp2);;Image Series (*.tif *.btf *.png *.jpg *.jp2);;Numpy Array (*.npy *.npz);;Allen Atlas (*.nrrd);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml)',self.fileOpenType)
+        filePaths,fileType = QtGui.QFileDialog.getOpenFileNamesAndFilter(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image (*.tif *.btf *.png *.jpg *.jp2);;Image Series (*.tif *.btf *.png *.jpg *.jp2);;Numpy Array (*.npy *.npz);;nrrd (*.nrrd);;nii (*.nii);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml)',self.fileOpenType)
         if len(filePaths)<1:
             return
         self.fileOpenPath = os.path.dirname(filePaths[0])
@@ -1385,7 +1385,7 @@ class ImageGui():
     def makeCCFVolume(self):
         self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
         refWin = self.alignRefWindow[self.selectedWindow]
-        if refWin is None or self.imageObjs[self.checkedFileIndex[refWin][0]].fileType!='atlas' or self.imageShapeIndex[self.selectedWindow][2]!=2:
+        if refWin is None or self.imageObjs[self.checkedFileIndex[refWin][0]].fileType!='nrrd' or self.imageShapeIndex[self.selectedWindow][2]!=2:
             raise Exception('Image must be aligned to Allen Atlas coronal sections')
         rng = self.imageRange[self.selectedWindow][2]
         refShape = self.imageObjs[self.checkedFileIndex[refWin][0]].shape[:3]
@@ -3092,8 +3092,8 @@ class ImageObj():
             if numCh==4:
                 numCh = 3
             self.shape = shape[:2]+(numImg,numCh)
-        elif fileType=='Allen Atlas (*.nrrd)':
-            self.fileType = 'atlas'
+        elif fileType in ('nrrd (*.nrrd)','nii (*.nii)'):
+            self.fileType = 'nrrd' if fileType=='nrrd (*.nrrd)' else 'nii'
             self.filePath = filePath
             self.dtype = np.uint8
             self.shape = (320,456,528,1)
@@ -3170,8 +3170,12 @@ class ImageObj():
                 if isinstance(d,np.lib.npyio.NpzFile):
                     d = d[d.keys()[0]]
                 data = self.formatData(d)
-            elif self.fileType=='atlas':
+            elif self.fileType=='nrrd':
                 data,_ = nrrd.read(self.filePath)
+                data = self.formatData(data.transpose((1,2,0)))
+            elif self.fileType=='nii':
+                d = nibabel.nifti1.load(self.filePath)
+                data = d.get_data()
                 data = self.formatData(data.transpose((1,2,0)))
         else:
             data = self.data
