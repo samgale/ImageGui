@@ -748,7 +748,11 @@ class ImageGui():
     def plotImage(self):
         plt.figure(facecolor='w')
         ax = plt.subplot(1,1,1)
-        ax.imshow(self.getImage(atlas=False),interpolation='none')
+        img = self.getImage(atlas=False)
+        if img.dtype is not np.uint8:
+            img = img.astype(float)
+            img /= self.levelsMax[self.selectedWindow]
+        ax.imshow(img,interpolation='none')
         if len(self.selectedAtlasRegions[self.selectedWindow])>0:
             for regionID in self.selectedAtlasRegionIDs[self.selectedWindow]:
                 contours = self.getAtlasRegionContours(self.selectedWindow,regionID)
