@@ -20,6 +20,7 @@ import cv2, nibabel, nrrd, PIL, png, tifffile
 from xml.dom import minidom
 import numpy as np
 import scipy.io, scipy.interpolate, scipy.ndimage
+from sklearn.linear_model import LinearRegression
 from PyQt4 import QtGui, QtCore
 import pyqtgraph as pg
 from matplotlib import pyplot as plt
@@ -1147,32 +1148,52 @@ class ImageGui():
     def rotateImage(self):
         self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
         sender = self.mainWin.sender()
-        imgAxis = self.imageShapeIndex[self.selectedWindow][2]
-        axes = self.imageShapeIndex[self.selectedWindow][:2]
+        axes = self.imageShapeIndex[self.selectedWindow]
         if sender in (self.imageMenuRotate90C,self.imageMenuRotate90CC):
             direction = -1 if sender is self.imageMenuRotate90C else 1
             for fileInd in self.selectedFileIndex:
-                self.imageObjs[fileInd].rotate90(direction,axes)
+                self.imageObjs[fileInd].rotate90(direction,axes[:2])
         else:
+            pts = self.markedPoints[self.selectedWindow]
             if sender is self.imageMenuRotateAngle:
                 angle,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Rotation Angle','degrees:',0,decimals=2)
                 if not ok or angle==0:
                     return
+                self.rotationAngle = [angle]
+                self.rotationAxes = [axes[:2]]
             else:
-                if  self.markedPoints[self.selectedWindow] is None or self.markedPoints[self.selectedWindow].shape[0]!=2:
-                    raise Exception('Two marked points are required for rotation to line')
-                pts = self.markedPoints[self.selectedWindow][:,axes]
-                dy,dx = pts[1]-pts[0]
-                angle = math.degrees(math.atan(dx/dy))
-                center = [(self.imageShape[self.selectedWindow][i]-1)/2 for i in axes]
-            if imgAxis in (1,2):
-                    angle *= -1
-            self.rotationAngle = angle
-            self.rotationAxes = axes
-            for fileInd in self.selectedFileIndex:
-                self.imageObjs[fileInd].rotate(angle,axes)
+                if pts is None or pts.shape[0]<2:
+                    raise Exception('At least two marked points are required for rotation to line')
+                y,x,z = pts[:,axes].T
+                xangle = math.degrees(math.atan(1/np.polyfit(x,y,1)[0])) if any(np.diff(x)) else 0
+                zangle = math.degrees(math.atan(1/np.polyfit(z,y,1)[0])) if any(np.diff(z)) else 0
+                self.rotationAngle = [xangle,zangle]
+                self.rotationAxes = [axes[:2],[axes[0],axes[2]]]
+            for i,(angle,ax) in enumerate(zip(self.rotationAngle,self.rotationAxes)):
+                if angle!=0:
+                    if 0 in ax:
+                        angle *= -1
+                        self.rotationAngle[i] *= -1
+                    s = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].shape[:3]
+                    center = [(s[i]-1)/2 for i in ax]
+                    for fileInd in self.selectedFileIndex:
+                        self.imageObjs[fileInd].rotate(angle,ax)
+                    if pts is not None:
+                        # translate points such that origin is center of rotation , rotate, then translate back to image origin
+                        # ynew = -x*sin(a) + y*cos(a)
+                        # xnew = x*cos(a) + y*sin(a)
+                        a = math.radians(angle)
+                        if 0 not in ax:
+                            a *= -1
+                        p = pts[:,ax]-center
+                        s = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].shape[:3]
+                        c = [(s[i]-1)/2 for i in ax]
+                        pts[:,ax[0]] = -p[:,1]*math.sin(a)+p[:,0]*math.cos(a)+c[0]
+                        pts[:,ax[1]] = np.mean(p[:,1]*math.cos(a)+p[:,0]*math.sin(a)+c[1])
             if len(self.selectedAtlasRegions[self.selectedWindow])>0:
                 self.rotateAnnotationData()
+            if pts is not None:
+                self.fillPointsTable()
         affectedWindows = self.getAffectedWindows()
         if self.stitchCheckbox.isChecked():
             for window in affectedWindows:
@@ -1181,27 +1202,6 @@ class ImageGui():
         else:
             for window in affectedWindows:
                 self.imageShape[window] = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].shape[:3]
-            if sender is self.imageMenuRotateLine:
-                # translate points such that origin is center of rotation , rotate, then translate back to image origin
-                # ynew = -x*sin(a) + y*cos(a)
-                # xnew = x*cos(a) + y*sin(a)
-                a = math.radians(angle)
-                if imgAxis==0:
-                    a *= -1
-                p = pts-center
-                c = [(self.imageShape[self.selectedWindow][i]-1)/2 for i in axes]
-                pts[:,0] = -p[:,1]*math.sin(a)+p[:,0]*math.cos(a)+c[0]
-                pts[:,1] = p[:,1]*math.cos(a)+p[:,0]*math.sin(a)+c[1]
-                if self.sliceProjState[self.selectedWindow]:
-                    n = self.imageShape[self.selectedWindow][imgAxis]
-                    self.markedPoints[self.selectedWindow] = np.zeros((n*2,3))
-                    self.markedPoints[self.selectedWindow][::2,imgAxis] = np.arange(n)
-                    self.markedPoints[self.selectedWindow][::2,axes] = pts[0]
-                    self.markedPoints[self.selectedWindow][1::2,imgAxis] = np.arange(n)
-                    self.markedPoints[self.selectedWindow][1::2,axes] = pts[1]
-                else:
-                    self.markedPoints[self.selectedWindow][:,axes] = pts
-                self.fillPointsTable()
             self.setImageRange()
             self.displayImageRange()
             self.setViewBoxRangeLimits(affectedWindows)
@@ -1713,7 +1713,8 @@ class ImageGui():
             
     def rotateAnnotationData(self):
         if self.atlasAnnotationData is not None:
-            self.atlasAnnotationData = scipy.ndimage.interpolation.rotate(self.atlasAnnotationData,self.rotationAngle,self.rotationAxes,order=0)
+            for angle,axes in zip(self.rotationAngle,self.rotationAxes):
+                self.atlasAnnotationData = scipy.ndimage.interpolation.rotate(self.atlasAnnotationData,angle,axes,order=0)
             
     def resetAnnotationData(self):
         self.clearAtlasRegions()
