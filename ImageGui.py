@@ -83,6 +83,7 @@ class ImageGui():
         self.markedPoints = [None]*self.numWindows
         self.markPointsSize = 5
         self.markPointsColor = (1,1,0)
+        self.markPointsStretchFactor = 1
         self.selectedPoint = None
         self.alignRefWindow = [None]*self.numWindows
         self.alignRange = [[None,None] for _ in range(self.numWindows)]
@@ -313,12 +314,6 @@ class ImageGui():
         self.analysisMenuPointsDrawTri = QtGui.QAction('Delauney Triangles',self.mainWin)
         self.analysisMenuPointsDrawTri.triggered.connect(self.drawLines)
         self.analysisMenuPointsDraw.addActions([self.analysisMenuPointsDrawLine,self.analysisMenuPointsDrawPoly,self.analysisMenuPointsDrawTri])
-        
-        self.analysisMenuPointsMeasure = self.analysisMenuPoints.addMenu('Measure')
-        self.analysisMenuPointsMeasureDisplay = QtGui.QAction('Display',self.mainWin)
-        self.analysisMenuPointsMeasureClipboard = QtGui.QAction('Send To Clipboard',self.mainWin)
-        self.analysisMenuPointsMeasureSave = QtGui.QAction('Save',self.mainWin)
-        self.analysisMenuPointsMeasure.addActions([self.analysisMenuPointsMeasureDisplay,self.analysisMenuPointsMeasureClipboard,self.analysisMenuPointsMeasureSave])
 
         self.analysisMenuPointsCopy = self.analysisMenuPoints.addMenu('Copy')
         self.analysisMenuPointsCopyFlip = QtGui.QAction('Flip Horizontal',self.mainWin)
@@ -340,6 +335,10 @@ class ImageGui():
         self.analysisMenuPointsClear = QtGui.QAction('Clear',self.mainWin)
         self.analysisMenuPointsClear.triggered.connect(self.clearPoints)
         self.analysisMenuPoints.addActions([self.analysisMenuPointsLoad,self.analysisMenuPointsSave,self.analysisMenuPointsClear])
+        
+        self.analysisMenuPointsStretch = QtGui.QAction('Set Stretch Factor',self.mainWin)
+        self.analysisMenuPointsStretch.triggered.connect(self.setMarkPointsStretchFactor)
+        self.analysisMenuPoints.addAction(self.analysisMenuPointsStretch)
         
         self.analysisMenuContours = self.analysisMenu.addMenu('Contours')
         self.analysisMenuContoursFind = self.analysisMenuContours.addMenu('Find')
@@ -1191,6 +1190,9 @@ class ImageGui():
                         c = [(s[i]-1)/2 for i in ax]
                         pts[:,ax[0]] = -p[:,1]*math.sin(a)+p[:,0]*math.cos(a)+c[0]
                         pts[:,ax[1]] = np.mean(p[:,1]*math.cos(a)+p[:,0]*math.sin(a)+c[1])
+                        imgInd = int(round(pts[0,ax[1]]))
+                        self.imageIndex[self.selectedWindow][ax[1]] = imgInd
+                        self.imageNumEditBoxes[ax[1]].setText(str(imgInd+1))
             if len(self.selectedAtlasRegions[self.selectedWindow])>0:
                 self.rotateAnnotationData()
             if pts is not None:
@@ -1782,7 +1784,7 @@ class ImageGui():
                         self.setImageNum(axis,imgInd+1)        
         elif key==QtCore.Qt.Key_W:
             self.setViewBoxRange(self.displayedWindows)
-        elif key==QtCore.Qt.Key_L:
+        elif key==QtCore.Qt.Key_L and int(modifiers & QtCore.Qt.AltModifier)>0:
             self.analysisMenuPointsLock.setChecked(not self.analysisMenuPointsLock.isChecked())
         elif self.stitchCheckbox.isChecked():
             if key in moveKeys:
@@ -1792,14 +1794,14 @@ class ImageGui():
                 self.stitchPos[windows,fileInd,moveAxis] += moveDist
                 self.updateStitchShape(windows)
                 self.displayImage(windows)
-        elif key==QtCore.Qt.Key_F:
+        elif key==QtCore.Qt.Key_F and int(modifiers & QtCore.Qt.AltModifier)>0:
             axis = self.imageShapeIndex[self.selectedWindow][1]
             imgAxis = self.imageShapeIndex[self.selectedWindow][2]
             imgInd = self.imageIndex[self.selectedWindow][imgAxis]
             for f in (set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex)):
                 self.imageObjs[f].flip(axis,imgAxis,imgInd)
                 self.displayImage(self.getAffectedWindows())
-        elif int(modifiers & QtCore.Qt.AltModifier)>0:
+        elif self.markedPoints[self.selectedWindow] is not None and int(modifiers & QtCore.Qt.AltModifier)>0:
             if key in (QtCore.Qt.Key_0,QtCore.Qt.Key_1)+moveKeys:
                 axis = self.imageShapeIndex[self.selectedWindow][2]
                 imgInd = self.imageIndex[self.selectedWindow][axis]
@@ -1919,6 +1921,11 @@ class ImageGui():
                             else:
                                 self.markPointsSize += 1
                             self.plotMarkedPoints(self.displayedWindows)
+        elif self.markedPoints[self.selectedWindow] is not None and int(modifiers & QtCore.Qt.ShiftModifier)>0:
+            if key in moveKeys[:2]:
+                stretch = 0.99 if key==moveKeys[0] else 1.01
+                self.markPointsStretchFactor *= stretch
+                self.stretchPoints(stretch)
                     
     def getMoveParams(self,window,key,modifiers,flipVert=False):
         down,up = QtCore.Qt.Key_Down,QtCore.Qt.Key_Up
@@ -1980,17 +1987,16 @@ class ImageGui():
                 self.setSelectedPoint(rows[np.argmin(np.sum((self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]]-[y,x])**2,axis=1)**0.5)])
         
     def imageDoubleClickCallback(self,event,window):
-        if self.analysisMenuPointsLock.isChecked():
-            return
-        x,y = (p*self.displayDownsample[window] for p in (event.pos().x(),event.pos().y()))
-        newPoint = np.array([y,x,self.imageIndex[window][self.imageShapeIndex[window][2]]])[list(self.imageShapeIndex[window])]
-        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [window]
-        for window in windows:
-            self.markedPoints[window] = newPoint[None,:] if self.markedPoints[window] is None else np.concatenate((self.markedPoints[window],newPoint[None,:]))
-            if window==self.selectedWindow:
-                self.fillPointsTable(append=True)
-        self.setSelectedPoint(self.markedPoints[window].shape[0]-1)
-        self.plotMarkedPoints(windows)
+        if event.button()==QtCore.Qt.LeftButton and not self.analysisMenuPointsLock.isChecked():
+            x,y = (p*self.displayDownsample[window] for p in (event.pos().x(),event.pos().y()))
+            newPoint = np.array([y,x,self.imageIndex[window][self.imageShapeIndex[window][2]]])[list(self.imageShapeIndex[window])]
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [window]
+            for window in windows:
+                self.markedPoints[window] = newPoint[None,:] if self.markedPoints[window] is None else np.concatenate((self.markedPoints[window],newPoint[None,:]))
+                if window==self.selectedWindow:
+                    self.fillPointsTable(append=True)
+            self.setSelectedPoint(self.markedPoints[window].shape[0]-1)
+            self.plotMarkedPoints(windows)
         
     def fileListboxSelectionCallback(self):
         self.selectedFileIndex = getSelectedItemsIndex(self.fileListbox)
@@ -2774,6 +2780,7 @@ class ImageGui():
             if window==self.selectedWindow:
                 self.clearPointsTable()
         self.setSelectedPoint(None)
+        self.markPointsStretchFactor = 1
         self.plotMarkedPoints(windows)
         
     def setSelectedPoint(self,point):
@@ -2865,6 +2872,7 @@ class ImageGui():
         windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
         for window in windows:
             self.markedPoints[window] = pts
+        self.markPointsStretchFactor = 1
         self.fillPointsTable()
         self.plotMarkedPoints()
         
@@ -2877,6 +2885,30 @@ class ImageGui():
         
     def clearPoints(self):
         self.clearMarkedPoints()
+        
+    def setMarkPointsStretchFactor(self):
+        stretch,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Set Stretch Factor','stretch factor:',self.markPointsStretchFactor,min=0.00001,decimals=5)
+        if not ok:
+            return
+        self.stretchPoints(stretch/self.markPointsStretchFactor)
+        self.markPointsStretchFactor = stretch
+    
+    def stretchPoints(self,stretch):
+        axes = self.imageShapeIndex[self.selectedWindow]
+        imgInd = self.imageIndex[self.selectedWindow][axes[2]]
+        rows = np.where(self.markedPoints[self.selectedWindow][:,axes[2]].round()==imgInd)[0]
+        if rows.size>1:
+            col = axes[0]
+            y = self.markedPoints[self.selectedWindow][rows,col]
+            y0 = y.max()
+            y -= y0
+            y *= stretch
+            y += y0
+            self.markedPoints[self.selectedWindow][rows,col] = y
+            for row in rows:
+                ind = col if col==2 else int(not col)
+                self.markPointsTable.item(row,ind).setText(str(self.markedPoints[self.selectedWindow][row,col]+1))
+            self.plotMarkedPoints()
         
     def markPointsTableResizeCallback(self,event):
         w = int(self.markPointsTable.viewport().width()/3)
