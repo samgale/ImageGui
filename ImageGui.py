@@ -666,6 +666,7 @@ class ImageGui():
         self.markPointsTable = QtGui.QTableWidget(1,3)
         self.markPointsTable.resizeEvent = self.markPointsTableResizeCallback
         self.markPointsTable.keyPressEvent = self.markPointsTableKeyPressCallback
+        self.markPointsTable.itemSelectionChanged.connect(self.markPointsTableSelectionCallback)
         self.markPointsTable.setHorizontalHeaderLabels(['X','Y','Z'])
         for col in range(3):
             item = QtGui.QTableWidgetItem('')
@@ -1891,14 +1892,13 @@ class ImageGui():
                 windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
                 for window in windows:
                     imgAxis = self.imageShapeIndex[window][2]
-                    if self.markedPoints[window][self.selectedPoint,imgAxis]==self.imageIndex[window][imgAxis]:
+                    if round(self.markedPoints[window][self.selectedPoint,imgAxis])==self.imageIndex[window][imgAxis]:
                         if key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace):
                             if not self.analysisMenuPointsLock.isChecked():
                                 if int(modifiers & QtCore.Qt.ControlModifier)>0 or self.markedPoints[window].shape[0]<2:
                                     self.clearMarkedPoints()
                                 else:
                                     self.deleteSelectedPoint()
-                            return
                         elif key in moveKeys[:4]:
                             moveAxis,moveDist = self.getMoveParams(window,key,modifiers,True)
                             point = self.markedPoints[window][self.selectedPoint]
@@ -1919,7 +1919,6 @@ class ImageGui():
                             else:
                                 self.markPointsSize += 1
                             self.plotMarkedPoints(self.displayedWindows)
-                            return
                     
     def getMoveParams(self,window,key,modifiers,flipVert=False):
         down,up = QtCore.Qt.Key_Down,QtCore.Qt.Key_Up
@@ -1978,7 +1977,7 @@ class ImageGui():
             axis = self.imageShapeIndex[window][2]
             rows = np.where(self.markedPoints[window][:,axis].round()==self.imageIndex[window][axis])[0]
             if len(rows)>0:
-                self.selectedPoint = rows[np.argmin(np.sum(np.absolute(self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]]-[y,x]),axis=1))]
+                self.setSelectedPoint(rows[np.argmin(np.sum((self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]]-[y,x])**2,axis=1)**0.5)])
         
     def imageDoubleClickCallback(self,event,window):
         if self.analysisMenuPointsLock.isChecked():
@@ -1990,7 +1989,7 @@ class ImageGui():
             self.markedPoints[window] = newPoint[None,:] if self.markedPoints[window] is None else np.concatenate((self.markedPoints[window],newPoint[None,:]))
             if window==self.selectedWindow:
                 self.fillPointsTable(append=True)
-        self.selectedPoint = self.markedPoints[window].shape[0]-1
+        self.setSelectedPoint(self.markedPoints[window].shape[0]-1)
         self.plotMarkedPoints(windows)
         
     def fileListboxSelectionCallback(self):
@@ -2242,7 +2241,7 @@ class ImageGui():
             region.setChecked(ind in self.selectedAtlasRegions[window])
         self.clearPointsTable()
         self.fillPointsTable()
-        self.selectedPoint = None
+        self.setSelectedPoint(None)
         isAligned = self.alignRefWindow[window] is not None
         self.alignCheckbox.setChecked(isAligned)
         alignRange = [str(self.alignRange[window][i]+1) if self.alignRange[window][i] is not None else '' for i in (0,1)]
@@ -2754,7 +2753,7 @@ class ImageGui():
                 rows = range(numPts)
             for row in rows:
                 pt = [str(round(self.markedPoints[self.selectedWindow][row,i],2)+1) for i in (1,0,2)]
-                for col in range(3):
+                for col in range(self.markPointsTable.columnCount()):
                     if row>0:
                         item = QtGui.QTableWidgetItem(pt[col])
                         item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
@@ -2774,16 +2773,28 @@ class ImageGui():
             self.markedPoints[window] = None
             if window==self.selectedWindow:
                 self.clearPointsTable()
-        self.selectedPoint = None
+        self.setSelectedPoint(None)
         self.plotMarkedPoints(windows)
+        
+    def setSelectedPoint(self,point):
+        self.selectedPoint = point
+        self.markPointsTable.blockSignals(True)
+        for row in range(self.markPointsTable.rowCount()):
+            selected = True if row==self.selectedPoint else False
+            for col in range(self.markPointsTable.columnCount()):
+                self.markPointsTable.item(row,col).setSelected(selected)
+        self.markPointsTable.blockSignals(False)
         
     def deleteSelectedPoint(self):
         windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
         for window in windows:
             self.markedPoints[window] = np.delete(self.markedPoints[window],self.selectedPoint,0)
         self.markPointsTable.removeRow(self.selectedPoint)
-        self.selectedPoint = None
+        self.setSelectedPoint(None)
         self.plotMarkedPoints(windows)
+        
+    def markPointsTableSelectionCallback(self):
+        self.selectedPoint = None
         
     def setMarkedPointsLineStyle(self):
         sender = self.mainWin.sender()
