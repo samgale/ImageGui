@@ -20,7 +20,6 @@ import cv2, nibabel, nrrd, PIL, png, tifffile
 from xml.dom import minidom
 import numpy as np
 import scipy.io, scipy.interpolate, scipy.ndimage
-from sklearn.linear_model import LinearRegression
 from PyQt4 import QtGui, QtCore
 import pyqtgraph as pg
 from matplotlib import pyplot as plt
@@ -1938,9 +1937,9 @@ class ImageGui():
         else: # minus,plus
             axis = self.imageShapeIndex[window][2]
         if int(modifiers & QtCore.Qt.ShiftModifier)>0:
-            dist = 100
-        elif int(modifiers & QtCore.Qt.ControlModifier)>0:
             dist = 10
+        elif int(modifiers & QtCore.Qt.ControlModifier)>0:
+            dist = 0.1
         else:
             dist = 1
         if key in (down,QtCore.Qt.Key_Left,QtCore.Qt.Key_Minus):
@@ -3011,8 +3010,12 @@ class ImageGui():
         
     def getContours(self):
         image = self.getImage(self.selectedWindow,downsample=self.displayDownsample[self.selectedWindow],binary=True)
-        _,contours,_ = cv2.findContours(image.max(axis=2),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+        yRange,xRange = [self.imageRange[self.selectedWindow][axis] for axis in self.imageShapeIndex[self.selectedWindow][:2]]
+        roi = image[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1]
+        _,contours,_ = cv2.findContours(roi.max(axis=2),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
         contours = [c for c in contours if c.shape[0]>=self.minContourVertices]
+        for c in contours:
+            c[:,0,:2] += [xRange[0],yRange[0]]
         if len(contours)>1 and (self.analysisMenuContoursMergeHorz.isChecked() or self.analysisMenuContoursMergeVert.isChecked()):
             mergeAxis = 1 if self.analysisMenuContoursMergeHorz.isChecked() else 0
             contours.sort(key=lambda x: x[:,0,mergeAxis].min())
