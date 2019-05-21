@@ -3010,7 +3010,7 @@ class ImageGui():
         
     def getContours(self):
         image = self.getImage(self.selectedWindow,downsample=self.displayDownsample[self.selectedWindow],binary=True)
-        yRange,xRange = [self.imageRange[self.selectedWindow][axis] for axis in self.imageShapeIndex[self.selectedWindow][:2]]
+        yRange,xRange = [[r//self.displayDownsample[self.selectedWindow] for r in self.imageRange[self.selectedWindow][axis]] for axis in self.imageShapeIndex[self.selectedWindow][:2]]
         roi = image[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1]
         _,contours,_ = cv2.findContours(roi.max(axis=2),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
         contours = [c for c in contours if c.shape[0]>=self.minContourVertices]
@@ -3365,7 +3365,7 @@ class ImageObj():
 def getImageInfo(filePath):
     if filePath[-4:] in ('.tif','.btf'):
         img = tifffile.TiffFile(filePath)
-        dtype = np.uint16 if img.pages[0].bits_per_sample==16 else np.uint8
+        dtype = np.uint16 if img.pages[0].bitspersample==16 else np.uint8
         shape = img.pages[0].shape
         if len(shape)>2:
             numCh = shape[2]
@@ -3395,7 +3395,8 @@ def getImageInfo(filePath):
 def getImageData(filePath,memmap=False):
     if filePath[-4:] in ('.tif','.btf'):
         img = tifffile.TiffFile(filePath)
-        data = img.asarray(memmap=memmap)
+        out = 'memmap' if memmap else None
+        data = img.asarray(out=out)
         if len(img.pages)>1 and len(data.shape)>2:
             data = data.transpose((1,2,0))[:,:,::-1]
         img.close()
