@@ -20,11 +20,12 @@ import cv2, nibabel, nrrd, PIL, png, tifffile
 from xml.dom import minidom
 import numpy as np
 import scipy.io, scipy.interpolate, scipy.ndimage
-from PyQt4 import QtGui, QtCore
+from PyQt5 import QtGui, QtCore
 import pyqtgraph as pg
-from matplotlib import pyplot as plt
-import matplotlib as mpl
-mpl.rcParams['pdf.fonttype'] = 42
+import matplotlib
+matplotlib.use('qt5agg')
+matplotlib.rcParams['pdf.fonttype'] = 42
+import matplotlib.pyplot as plt
 
 
 def start(data=None,label=None,autoColor=False,mode=None):
@@ -34,6 +35,7 @@ def start(data=None,label=None,autoColor=False,mode=None):
     imageGuiObj = ImageGui(app)
     if data is not None:
         app.processEvents()
+        imageGuiObj.fileSavePath = imageGuiObj.fileOpenPath
         if not isinstance(data,list):
             data = [data]
             label = [label]
@@ -54,7 +56,7 @@ class ImageGui():
         self.app = app
         self.fileOpenPath = os.path.dirname(os.path.realpath(__file__))
         self.fileOpenType = 'Image (*.tif  *png *.jpg *.jp2)'
-        self.fileSavePath = self.fileOpenPath
+        self.fileSavePath = None
         self.plotColorOptions = ('Red','Green','Blue','Cyan','Yellow','Magenta','Black','White','Gray')
         self.plotColors = ((1,0,0),(0,1,0),(0,0,1),(0,1,1),(1,1,0),(1,0,1),(0,0,0),(1,1,1),(0.5,0.5,0.5))
         self.numWindows = 4
@@ -773,7 +775,7 @@ class ImageGui():
         plt.show()
     
     def saveImage(self):
-        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'Image (*.tif  *png *.jpg)')
+        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'Image (*.tif  *png *.jpg)')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
@@ -793,7 +795,7 @@ class ImageGui():
             fileType = '*.npz'
         else:
             fileType = '*.mat'
-        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,fileType)
+        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,fileType)
         if filePath=='':
             return
         fileType = filePath[-3:]
@@ -842,11 +844,13 @@ class ImageGui():
         return True
                    
     def openFile(self):
-        filePaths,fileType = QtGui.QFileDialog.getOpenFileNamesAndFilter(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image (*.tif *.btf *.png *.jpg *.jp2);;Image Series (*.tif *.btf *.png *.jpg *.jp2);;Numpy Array (*.npy *.npz);;nrrd (*.nrrd);;nii (*.nii);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml)',self.fileOpenType)
+        filePaths,fileType = QtGui.QFileDialog.getOpenFileNames(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image (*.tif *.btf *.png *.jpg *.jp2);;Image Series (*.tif *.btf *.png *.jpg *.jp2);;Numpy Array (*.npy *.npz);;nrrd (*.nrrd);;nii (*.nii);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml)',self.fileOpenType)
         if len(filePaths)<1:
             return
         self.fileOpenPath = os.path.dirname(filePaths[0])
         self.fileOpenType = fileType
+        if self.fileSavePath is None:
+            self.fileSavePath = self.fileOpenPath
         chFileOrg = None
         numCh = None
         isMappable = any(True for f in filePaths if f[-4:] in ('.tif','.btf'))
@@ -1213,7 +1217,7 @@ class ImageGui():
     def saveOffsets(self):
         if len(self.selectedFileIndex)>1:
             raise Exception('Select a single image object to return its offsets')
-        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
+        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
         if filePath=='':
             return
         offset = self.imageObjs[self.selectedFileIndex[0]].getOffsets()
@@ -1223,14 +1227,14 @@ class ImageGui():
         self.localAdjustHistory = [[] for _ in range(self.numWindows)]
     
     def saveLocalAdjustHistory(self):
-        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npz')
+        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npz')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
         np.savez(filePath,*self.localAdjustHistory[self.selectedWindow])
     
     def loadLocalAdjust(self):
-        filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npz')
+        filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npz')
         if filePath=='':
             return
         self.fileOpenPath = os.path.dirname(filePath)
@@ -1300,7 +1304,7 @@ class ImageGui():
             self.transformShape = tuple(self.imageShape[refWin][i] for i in self.imageShapeIndex[refWin][:2])+(rng[1]-rng[0]+1,)
             self.transformMatrix = np.zeros((rng[1]-rng[0]+1,2,3),dtype=np.float32)
         else:
-            filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npz')
+            filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npz')
             if filePath=='':
                 return
             self.fileOpenPath = os.path.dirname(filePath)
@@ -1340,7 +1344,7 @@ class ImageGui():
         self.displayImage()
         
     def saveTransformMatrix(self):
-        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npz')
+        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npz')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
@@ -1670,7 +1674,7 @@ class ImageGui():
         
     def setAtlasRegions(self):
         if self.atlasAnnotationData is None:
-            filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose Annotation Data File',self.fileOpenPath,'*.nrrd')
+            filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose Annotation Data File',self.fileOpenPath,'*.nrrd')
             if filePath=='':
                 self.resetAtlasRegionMenu()
                 return
@@ -1678,7 +1682,7 @@ class ImageGui():
             self.atlasAnnotationData,_ = nrrd.read(filePath)
             self.atlasAnnotationData = self.atlasAnnotationData.transpose((1,2,0))
         if self.atlasAnnotationRegions is None:
-            filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose Annotation Region Hierarchy File',self.fileOpenPath,'*.xml')
+            filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose Annotation Region Hierarchy File',self.fileOpenPath,'*.xml')
             if filePath=='':
                 self.resetAtlasRegionMenu()
                 return
@@ -2132,7 +2136,7 @@ class ImageGui():
             option.setChecked(option is sender)
             
     def loadStitchPositions(self):
-        filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npy')
+        filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npy')
         if filePath=='':
             return
         self.fileOpenPath = os.path.dirname(filePath)
@@ -2140,7 +2144,7 @@ class ImageGui():
         self.initStitch()
     
     def saveStitchPositions(self):
-        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
+        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
@@ -2595,14 +2599,14 @@ class ImageGui():
                 self.alignWindows(window,axis)
         
     def saveImageRange(self):
-        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
+        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
         np.save(filePath,self.imageRange[self.selectedWindow])
     
     def loadImageRange(self):
-        filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npy')
+        filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npy')
         if filePath=='':
             return
         self.fileOpenPath = os.path.dirname(filePath)
@@ -2861,7 +2865,7 @@ class ImageGui():
         self.plotMarkedPoints([self.selectedWindow])
         
     def loadPoints(self):
-        filePath = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose saved points file',self.fileOpenPath,'*.npy')
+        filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose saved points file',self.fileOpenPath,'*.npy')
         if filePath=='':
             return
         self.fileOpenPath = os.path.dirname(filePath)
@@ -2876,7 +2880,7 @@ class ImageGui():
         self.plotMarkedPoints()
         
     def savePoints(self):
-        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
+        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
@@ -3062,7 +3066,7 @@ class ImageGui():
                 self.analysisMenuContoursMergeHorz.setChecked(False)
     
     def saveContours(self):
-        filePath = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'Image (*.tif *.png *.jpg)')
+        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'Image (*.tif *.png *.jpg)')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
