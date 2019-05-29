@@ -55,7 +55,7 @@ class ImageGui():
     def __init__(self,app):
         self.app = app
         self.fileOpenPath = os.path.dirname(os.path.realpath(__file__))
-        self.fileOpenType = 'Image (*.tif  *png *.jpg *.jp2)'
+        self.fileSeriesType = 'Image Series (*.tif *.btf *.png *.jpg *.jp2)'
         self.fileSavePath = None
         self.plotColorOptions = ('Red','Green','Blue','Cyan','Yellow','Magenta','Black','White','Gray')
         self.plotColors = ((1,0,0),(0,1,0),(0,0,1),(0,1,1),(1,1,0),(1,0,1),(0,0,0),(1,1,1),(0.5,0.5,0.5))
@@ -114,10 +114,13 @@ class ImageGui():
         # file menu
         self.menuBar = self.mainWin.menuBar()
         self.menuBar.setNativeMenuBar(False)
-        self.fileMenu = self.menuBar.addMenu('File')   
-        self.fileMenuOpen = QtGui.QAction('Open',self.mainWin)
-        self.fileMenuOpen.triggered.connect(self.openFile)
-        self.fileMenu.addAction(self.fileMenuOpen)
+        self.fileMenu = self.menuBar.addMenu('File')
+        self.fileMenuOpen = self.fileMenu.addMenu('Open')
+        self.fileMenuOpenFiles = QtGui.QAction('File(s)',self.mainWin)
+        self.fileMenuOpenFiles.triggered.connect(self.openImageFiles)
+        self.fileMenuOpenSeries = QtGui.QAction('Image Series',self.mainWin)
+        self.fileMenuOpenSeries.triggered.connect(self.openImageSeries)
+        self.fileMenuOpen.addActions([self.fileMenuOpenFiles,self.fileMenuOpenSeries])
         
         self.fileMenuSave = self.fileMenu.addMenu('Save')
         self.fileMenuSaveDisplay = QtGui.QAction('Display',self.mainWin)
@@ -843,17 +846,24 @@ class ImageGui():
                     return False
         return True
                    
-    def openFile(self):
-        filePaths,fileType = QtGui.QFileDialog.getOpenFileNames(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image (*.tif *.btf *.png *.jpg *.jp2);;Image Series (*.tif *.btf *.png *.jpg *.jp2);;Numpy Array (*.npy *.npz);;nrrd (*.nrrd);;nii (*.nii);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml)',self.fileOpenType)
-        if len(filePaths)<1:
-            return
+    def openImageFiles(self):
+        filePaths,fileType = QtGui.QFileDialog.getOpenFileNames(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image Data (*.tif *.btf *.png *.jpg *.jp2 *.npy *.npz *.nrrd *.nii)')
+        if len(filePaths)>0:
+            self.loadImageFiles(filePaths,fileType)
+            
+    def openImageSeries(self):
+        filePaths,fileType = QtGui.QFileDialog.getOpenFileNames(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image Series (*.tif *.btf *.png *.jpg *.jp2);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml)',self.fileSeriesType)
+        if len(filePaths)>0:
+            self.fileSeriesType = fileType
+            self.loadImageFiles(filePaths,fileType)
+        
+    def loadImageFiles(self,filePaths,fileType):
         self.fileOpenPath = os.path.dirname(filePaths[0])
-        self.fileOpenType = fileType
         if self.fileSavePath is None:
             self.fileSavePath = self.fileOpenPath
         chFileOrg = None
         numCh = None
-        isMappable = any(True for f in filePaths if f[-4:] in ('.tif','.btf'))
+        isMappable = any(True for f in filePaths if os.path.splitext(f)[1] in ('.tif','.btf'))
         if fileType=='Image Series (*.tif *.btf *.png *.jpg *.jp2)':
             filePaths = [filePaths]
             chFileOrg,ok = QtGui.QInputDialog.getItem(self.mainWin,'Import Image Series','Channel file organization:',('rgb','alternating','blocks'))
@@ -872,7 +882,7 @@ class ImageGui():
                 itemPath = os.path.join(dirPath,item)
                 if os.path.isdir(itemPath):
                     for f in os.listdir(itemPath):
-                        if f[-4:]=='.xml':
+                        if os.path.splitext(f)[1]=='.xml':
                             fpath = os.path.join(itemPath,f)
                             if minidom.parse(fpath).getElementsByTagName('Sequence').item(0).getAttribute('type') in ('ZSeries','Single'):
                                 filePaths.append(fpath)
@@ -1976,13 +1986,12 @@ class ImageGui():
             
     def imageClickCallback(self,event,window):
         x,y = int(event.pos().x()),int(event.pos().y())
-        if event.button()==QtCore.Qt.LeftButton:
-            if self.view3dCheckbox.isChecked():
-                for line,pos in zip(self.view3dSliceLines[window],(y,x)):
-                    line.setValue(pos)
-                self.updateView3dLines(axes=self.imageShapeIndex[window][:2],position=(y,x))
-            elif not self.viewChannelsCheckbox.isChecked():
-                self.windowListbox.setCurrentRow(window)
+        if not self.viewChannelsCheckbox.isChecked():
+            self.windowListbox.setCurrentRow(window)
+        if event.button()==QtCore.Qt.LeftButton and self.view3dCheckbox.isChecked():
+            for line,pos in zip(self.view3dSliceLines[window],(y,x)):
+                line.setValue(pos)
+            self.updateView3dLines(axes=self.imageShapeIndex[window][:2],position=(y,x))
         elif event.button()==QtCore.Qt.RightButton and self.markedPoints[window] is not None:
             axis = self.imageShapeIndex[window][2]
             rows = np.where(self.markedPoints[window][:,axis].round()==self.imageIndex[window][axis])[0]
@@ -3073,7 +3082,8 @@ class ImageGui():
         image = self.getImage()
         for ind,r in enumerate(self.contourRectangles):
             r = [i*self.displayDownsample[self.selectedWindow] for i in r]
-            cv2.imwrite(filePath[:-4]+'_'+str(ind+1)+filePath[-4:],image[r[1]:r[1]+r[3],r[0]:r[0]+r[2],::-1])
+            fileName,fileExt = os.path.splitext(filePath)
+            cv2.imwrite(fileName+'_'+str(ind+1)+fileExt,image[r[1]:r[1]+r[3],r[0]:r[0]+r[2],::-1])
 
 
 class ImageObj():
@@ -3096,23 +3106,49 @@ class ImageObj():
             if numCh==4:
                 numCh = 3
             self.shape = shape[:2]+(numImg,numCh)
-        elif fileType=='Image (*.tif *.btf *.png *.jpg *.jp2)':
-            self.fileType = 'bigtiff' if fileType[-4:]=='.btf' else 'image'
-            self.dtype,shape,numCh = getImageInfo(filePath)
-            self.filePath = [[filePath]]*numCh
-            self.shape = shape+(1,numCh)
+        elif fileType=='Image Data (*.tif *.btf *.png *.jpg *.jp2 *.npy *.npz *.nrrd *.nii)':
+            fileExt = os.path.splitext(filePath)[1][1:]
+            if fileExt in ('npy','npz'):
+                self.fileType = 'numpy'
+                self.filePath = filePath
+                if fileExt=='npz':
+                    z = zipfile.ZipFile(filePath)
+                    npy = z.open(z.namelist()[0])
+                else:
+                    npy = open(filePath,'rb')
+                version = np.lib.format.read_magic(npy)
+                shape,fortran,dtype = np.lib.format._read_array_header(npy,version)
+                npy.close()
+                self.dtype = dtype if dtype==np.uint16 else np.uint8
+                numImg = shape[2] if len(shape)>2 else 1
+                numCh = shape[3] if len(shape)>3 else 1
+                if numCh==4:
+                    numCh = 3
+                self.shape = shape[:2]+(numImg,numCh)
+            elif fileExt in ('nrrd','nii'):
+                self.fileType = fileExt
+                self.filePath = filePath
+                self.dtype = np.uint8
+                self.shape = (320,456,528,1)
+                self.pixelSize = [25.0]*3
+            else:
+                self.fileType = 'bigtiff' if fileExt=='btf' else 'image'
+                self.dtype,shape,numCh = getImageInfo(filePath)
+                self.filePath = [[filePath]]*numCh
+                self.shape = shape+(1,numCh)  
         elif fileType=='Image Series (*.tif *.btf *.png *.jpg *.jp2)':
             for ind,f in enumerate(filePath):
+                fext = os.path.splitext(f)[1][1:]
                 dtype,s,n = getImageInfo(f)
                 if ind==0:
                     if numCh is None:
                         numCh = n
-                    self.fileType = 'bigtiff' if f[-4:]=='.btf' else 'image'
+                    self.fileType = 'bigtiff' if fext=='btf' else 'image'
                     self.filePath = [[] for _ in range(numCh)]
                     self.dtype = dtype
                     shape = s
                 else:
-                    if (self.fileType=='bitfiff' and f[-4:]!='.btf') or (self.fileType=='image' and f[-4:]=='.btf'):
+                    if (self.fileType=='bitfiff' and fext!='btf') or (self.fileType=='image' and fext=='btf'):
                         raise Exception('All image files in series must be .btf if any are .btf')
                     if dtype!=self.dtype:
                         raise Exception('All images in series must have the same data type')
@@ -3130,29 +3166,6 @@ class ImageObj():
                     self.filePath[ch].append(f)
             numImg = len(filePath) if chFileOrg=='rgb' else int(len(filePath)/numCh)
             self.shape = shape+(numImg,numCh)
-        elif fileType=='Numpy Array (*.npy *.npz)':
-            self.fileType = 'numpy'
-            self.filePath = filePath
-            if filePath[-4:]=='.npz':
-                z = zipfile.ZipFile(filePath)
-                npy = z.open(z.namelist()[0])
-            else:
-                npy = open(filePath,'rb')
-            version = np.lib.format.read_magic(npy)
-            shape,fortran,dtype = np.lib.format._read_array_header(npy,version)
-            npy.close()
-            self.dtype = dtype if dtype==np.uint16 else np.uint8
-            numImg = shape[2] if len(shape)>2 else 1
-            numCh = shape[3] if len(shape)>3 else 1
-            if numCh==4:
-                numCh = 3
-            self.shape = shape[:2]+(numImg,numCh)
-        elif fileType in ('nrrd (*.nrrd)','nii (*.nii)'):
-            self.fileType = 'nrrd' if fileType=='nrrd (*.nrrd)' else 'nii'
-            self.filePath = filePath
-            self.dtype = np.uint8
-            self.shape = (320,456,528,1)
-            self.pixelSize = [25.0]*3
         elif fileType in ('Bruker Dir (*.xml)','Bruker Dir + Siblings (*.xml)'):
             self.fileType = 'image'
             xml = minidom.parse(filePath)
@@ -3367,7 +3380,8 @@ class ImageObj():
 
 
 def getImageInfo(filePath):
-    if filePath[-4:] in ('.tif','.btf'):
+    fileExt = os.path.splitext(filePath)[1][1:]
+    if fileExt in ('tif','btf'):
         img = tifffile.TiffFile(filePath)
         dtype = np.uint16 if img.pages[0].bitspersample==16 else np.uint8
         shape = img.pages[0].shape
@@ -3378,7 +3392,7 @@ def getImageInfo(filePath):
             # numCh = len(img.pages)
             numCh = sum(1 for p in img.pages if p.shape==shape)
         img.close()
-    elif filePath[-4:]=='.png':
+    elif fileExt=='png':
         img = png.Reader(str(filePath)).read()
         dtype = np.uint16 if img[3]['bitdepth']==16 else np.uint8
         shape = img[1::-1]
@@ -3397,7 +3411,8 @@ def getImageInfo(filePath):
     return dtype,shape,numCh
 
 def getImageData(filePath,memmap=False):
-    if filePath[-4:] in ('.tif','.btf'):
+    fileExt = os.path.splitext(filePath)[1][1:]
+    if fileExt in ('tif','btf'):
         img = tifffile.TiffFile(filePath)
         out = 'memmap' if memmap else None
         data = img.asarray(out=out)
