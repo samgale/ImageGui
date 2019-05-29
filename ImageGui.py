@@ -2481,7 +2481,7 @@ class ImageGui():
         
     def setImageNum(self,axis,imgInd=None):
         if imgInd is None:
-            imgInd = float(self.imageNumEditBoxes[axis].text())-1
+            imgInd = int(float(self.imageNumEditBoxes[axis].text()))-1
         if imgInd<self.imageRange[self.selectedWindow][axis][0]:
             imgInd = self.imageRange[self.selectedWindow][axis][0]
         elif imgInd>self.imageRange[self.selectedWindow][axis][1]:
@@ -2529,12 +2529,12 @@ class ImageGui():
                 rangeInd = boxes.index(sender)
                 break
         if rangeInd==0:
-            newVal = round(float(self.rangeEditBoxes[axis][0].text()))-1
+            newVal = int(float(self.rangeEditBoxes[axis][0].text()))-1
             axMin = 0
-            axMax = float(self.rangeEditBoxes[axis][1].text())-1
+            axMax = int(float(self.rangeEditBoxes[axis][1].text()))-1
         else:
-            newVal = round(float(self.rangeEditBoxes[axis][1].text()))-1
-            axMin = float(self.rangeEditBoxes[axis][0].text())-1
+            newVal = int(float(self.rangeEditBoxes[axis][1].text()))-1
+            axMin = int(float(self.rangeEditBoxes[axis][0].text()))-1
             axMax = self.imageShape[self.selectedWindow][axis]-1
         if newVal<axMin:
             newVal = axMin
