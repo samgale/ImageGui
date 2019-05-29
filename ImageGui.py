@@ -1508,7 +1508,7 @@ class ImageGui():
             self.setViewBoxRange(self.displayedWindows)
         
     def downsampleEditCallback(self):
-        val = int(self.downsampleEdit.text())
+        val = int(float(self.downsampleEdit.text()))
         if val<1:
             val = 1
         if val==self.displayDownsample[self.selectedWindow]:
@@ -2481,7 +2481,7 @@ class ImageGui():
         
     def setImageNum(self,axis,imgInd=None):
         if imgInd is None:
-            imgInd = int(self.imageNumEditBoxes[axis].text())-1
+            imgInd = float(self.imageNumEditBoxes[axis].text())-1
         if imgInd<self.imageRange[self.selectedWindow][axis][0]:
             imgInd = self.imageRange[self.selectedWindow][axis][0]
         elif imgInd>self.imageRange[self.selectedWindow][axis][1]:
@@ -2529,12 +2529,12 @@ class ImageGui():
                 rangeInd = boxes.index(sender)
                 break
         if rangeInd==0:
-            newVal = int(self.rangeEditBoxes[axis][0].text())-1
+            newVal = round(float(self.rangeEditBoxes[axis][0].text()))-1
             axMin = 0
-            axMax = int(self.rangeEditBoxes[axis][1].text())-1
+            axMax = float(self.rangeEditBoxes[axis][1].text())-1
         else:
-            newVal = int(self.rangeEditBoxes[axis][1].text())-1
-            axMin = int(self.rangeEditBoxes[axis][0].text())-1
+            newVal = round(float(self.rangeEditBoxes[axis][1].text()))-1
+            axMin = float(self.rangeEditBoxes[axis][0].text())-1
             axMax = self.imageShape[self.selectedWindow][axis]-1
         if newVal<axMin:
             newVal = axMin
@@ -3236,7 +3236,7 @@ class ImageObj():
             elif self.fileType=='numpy':
                 d = np.load(self.filePath)
                 if isinstance(d,np.lib.npyio.NpzFile):
-                    d = d[d.keys()[0]]
+                    d = d[list(d.keys())[0]]
                 data = self.formatData(d)
             elif self.fileType=='nrrd':
                 data,_ = nrrd.read(self.filePath)
