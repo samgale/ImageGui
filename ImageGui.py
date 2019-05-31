@@ -20,7 +20,7 @@ import cv2, nibabel, nrrd, PIL, png, tifffile
 from xml.dom import minidom
 import numpy as np
 import scipy.io, scipy.interpolate, scipy.ndimage
-from PyQt5 import QtGui, QtCore
+from PyQt5 import QtWidgets, QtCore
 import pyqtgraph as pg
 import matplotlib
 matplotlib.use('qt5agg')
@@ -29,9 +29,9 @@ import matplotlib.pyplot as plt
 
 
 def start(data=None,label=None,autoColor=False,mode=None):
-    app = QtGui.QApplication.instance()
+    app = QtWidgets.QApplication.instance()
     if app is None:
-        app = QtGui.QApplication([])
+        app = QtWidgets.QApplication([])
     imageGuiObj = ImageGui(app)
     if data is not None:
         app.processEvents()
@@ -101,12 +101,12 @@ class ImageGui():
         # main window
         winHeight = 400
         winWidth = 1000
-        self.mainWin = QtGui.QMainWindow()
+        self.mainWin = QtWidgets.QMainWindow()
         self.mainWin.setWindowTitle('ImageGUI')
         self.mainWin.closeEvent = self.mainWinCloseCallback
         self.mainWin.keyPressEvent = self.mainWinKeyPressCallback
         self.mainWin.resize(winWidth,winHeight)
-        screenCenter = QtGui.QDesktopWidget().availableGeometry().center()
+        screenCenter = QtWidgets.QDesktopWidget().availableGeometry().center()
         mainWinRect = self.mainWin.frameGeometry()
         mainWinRect.moveCenter(screenCenter)
         self.mainWin.move(mainWinRect.topLeft())
@@ -116,180 +116,180 @@ class ImageGui():
         self.menuBar.setNativeMenuBar(False)
         self.fileMenu = self.menuBar.addMenu('File')
         self.fileMenuOpen = self.fileMenu.addMenu('Open')
-        self.fileMenuOpenFiles = QtGui.QAction('File(s)',self.mainWin)
+        self.fileMenuOpenFiles = QtWidgets.QAction('File(s)',self.mainWin)
         self.fileMenuOpenFiles.triggered.connect(self.openImageFiles)
-        self.fileMenuOpenSeries = QtGui.QAction('Image Series',self.mainWin)
+        self.fileMenuOpenSeries = QtWidgets.QAction('Image Series',self.mainWin)
         self.fileMenuOpenSeries.triggered.connect(self.openImageSeries)
         self.fileMenuOpen.addActions([self.fileMenuOpenFiles,self.fileMenuOpenSeries])
         
         self.fileMenuSave = self.fileMenu.addMenu('Save')
-        self.fileMenuSaveDisplay = QtGui.QAction('Display',self.mainWin)
+        self.fileMenuSaveDisplay = QtWidgets.QAction('Display',self.mainWin)
         self.fileMenuSaveDisplay.triggered.connect(self.saveImage)
-        self.fileMenuSaveImage = QtGui.QAction('Image',self.mainWin)
+        self.fileMenuSaveImage = QtWidgets.QAction('Image',self.mainWin)
         self.fileMenuSaveImage.triggered.connect(self.saveImage)
         self.fileMenuSave.addActions([self.fileMenuSaveDisplay,self.fileMenuSaveImage])
         
         self.fileMenuSaveVolume = self.fileMenuSave.addMenu('Volume')
-        self.fileMenuSaveVolumeImages = QtGui.QAction('Images',self.mainWin)
+        self.fileMenuSaveVolumeImages = QtWidgets.QAction('Images',self.mainWin)
         self.fileMenuSaveVolumeImages.triggered.connect(self.saveVolume)
-        self.fileMenuSaveVolumeMovie = QtGui.QAction('Movie',self.mainWin)
+        self.fileMenuSaveVolumeMovie = QtWidgets.QAction('Movie',self.mainWin)
         self.fileMenuSaveVolumeMovie.triggered.connect(self.saveVolume)
-        self.fileMenuSaveVolumeNpz = QtGui.QAction('npz',self.mainWin)
+        self.fileMenuSaveVolumeNpz = QtWidgets.QAction('npz',self.mainWin)
         self.fileMenuSaveVolumeNpz.triggered.connect(self.saveVolume)
-        self.fileMenuSaveVolumeMat = QtGui.QAction('mat',self.mainWin)
+        self.fileMenuSaveVolumeMat = QtWidgets.QAction('mat',self.mainWin)
         self.fileMenuSaveVolumeMat.triggered.connect(self.saveVolume)
         self.fileMenuSaveVolume.addActions([self.fileMenuSaveVolumeImages,self.fileMenuSaveVolumeMovie,self.fileMenuSaveVolumeNpz,self.fileMenuSaveVolumeMat])
         
-        self.fileMenuPlot = QtGui.QAction('Plot',self.mainWin)
+        self.fileMenuPlot = QtWidgets.QAction('Plot',self.mainWin)
         self.fileMenuPlot.triggered.connect(self.plotImage)
         self.fileMenu.addAction(self.fileMenuPlot)
         
         # options menu
         self.optionsMenu = self.menuBar.addMenu('Options')
-        self.optionsMenuImportLazy = QtGui.QAction('Use lazy/temporary import to save memory',self.mainWin,checkable=True)
-        self.optionsMenuImportMemmap = QtGui.QAction('Try to import tif and btf files as memmap',self.mainWin,checkable=True)
-        self.optionsMenuImportAutoColor = QtGui.QAction('Automatically Color Channels During Import',self.mainWin,checkable=True)
+        self.optionsMenuImportLazy = QtWidgets.QAction('Use lazy/temporary import to save memory',self.mainWin,checkable=True)
+        self.optionsMenuImportMemmap = QtWidgets.QAction('Try to import tif and btf files as memmap',self.mainWin,checkable=True)
+        self.optionsMenuImportAutoColor = QtWidgets.QAction('Automatically Color Channels During Import',self.mainWin,checkable=True)
         self.optionsMenu.addActions([self.optionsMenuImportLazy,self.optionsMenuImportMemmap,self.optionsMenuImportAutoColor])
         
         self.optionsMenuSetColor = self.optionsMenu.addMenu('Set Color')
-        self.optionsMenuSetColorView3dLine = QtGui.QAction('View 3D Line',self.mainWin)
+        self.optionsMenuSetColorView3dLine = QtWidgets.QAction('View 3D Line',self.mainWin)
         self.optionsMenuSetColorView3dLine.triggered.connect(self.setLineColor)
-        self.optionsMenuSetColorPoints = QtGui.QAction('Points',self.mainWin)
+        self.optionsMenuSetColorPoints = QtWidgets.QAction('Points',self.mainWin)
         self.optionsMenuSetColorPoints.triggered.connect(self.setLineColor)
-        self.optionsMenuSetColorContours = QtGui.QAction('Contours',self.mainWin)
+        self.optionsMenuSetColorContours = QtWidgets.QAction('Contours',self.mainWin)
         self.optionsMenuSetColorContours.triggered.connect(self.setLineColor)
-        self.optionsMenuSetColorAtlas = QtGui.QAction('Atlas',self.mainWin)
+        self.optionsMenuSetColorAtlas = QtWidgets.QAction('Atlas',self.mainWin)
         self.optionsMenuSetColorAtlas.triggered.connect(self.setLineColor)
         self.optionsMenuSetColor.addActions([self.optionsMenuSetColorView3dLine,self.optionsMenuSetColorPoints,self.optionsMenuSetColorContours,self.optionsMenuSetColorAtlas])
         
         # image menu
         self.imageMenu = self.menuBar.addMenu('Image')
         self.imageMenuConvert = self.imageMenu.addMenu('Convert')
-        self.imageMenuConvertTo8Bit = QtGui.QAction('To 8-Bit',self.mainWin)
+        self.imageMenuConvertTo8Bit = QtWidgets.QAction('To 8-Bit',self.mainWin)
         self.imageMenuConvertTo8Bit.triggered.connect(self.convertImage)
-        self.imageMenuConvertTo16Bit = QtGui.QAction('To 16-Bit',self.mainWin)
+        self.imageMenuConvertTo16Bit = QtWidgets.QAction('To 16-Bit',self.mainWin)
         self.imageMenuConvertTo16Bit.triggered.connect(self.convertImage)
         self.imageMenuConvert.addActions([self.imageMenuConvertTo8Bit,self.imageMenuConvertTo16Bit])
         
-        self.imageMenuInvert = QtGui.QAction('Invert',self.mainWin)
+        self.imageMenuInvert = QtWidgets.QAction('Invert',self.mainWin)
         self.imageMenuInvert.triggered.connect(self.invertImage)
         self.imageMenu.addAction(self.imageMenuInvert)
         
         self.imageMenuNorm = self.imageMenu.addMenu('Normalize')
-        self.imageMenuNormImages = QtGui.QAction('Images',self.mainWin)
+        self.imageMenuNormImages = QtWidgets.QAction('Images',self.mainWin)
         self.imageMenuNormImages.triggered.connect(self.normalizeImage)
-        self.imageMenuNormVolume = QtGui.QAction('Volume',self.mainWin)
+        self.imageMenuNormVolume = QtWidgets.QAction('Volume',self.mainWin)
         self.imageMenuNormVolume.triggered.connect(self.normalizeImage)
         self.imageMenuNorm.addActions([self.imageMenuNormImages,self.imageMenuNormVolume])
         
         self.imageMenuBackground = self.imageMenu.addMenu('Change Background')
-        self.imageMenuBackgroundBtoW = QtGui.QAction('Black To White',self.mainWin)
+        self.imageMenuBackgroundBtoW = QtWidgets.QAction('Black To White',self.mainWin)
         self.imageMenuBackgroundBtoW.triggered.connect(self.changeBackground)
-        self.imageMenuBackgroundWtoB = QtGui.QAction('White To Black',self.mainWin)
+        self.imageMenuBackgroundWtoB = QtWidgets.QAction('White To Black',self.mainWin)
         self.imageMenuBackgroundWtoB.triggered.connect(self.changeBackground)
         self.imageMenuBackground.addActions([self.imageMenuBackgroundBtoW,self.imageMenuBackgroundWtoB])
         
         self.imageMenuRange = self.imageMenu.addMenu('Set Range')
-        self.imageMenuRangeLoad = QtGui.QAction('Load',self.mainWin)
+        self.imageMenuRangeLoad = QtWidgets.QAction('Load',self.mainWin)
         self.imageMenuRangeLoad.triggered.connect(self.loadImageRange)
-        self.imageMenuRangeSave = QtGui.QAction('Save',self.mainWin)
+        self.imageMenuRangeSave = QtWidgets.QAction('Save',self.mainWin)
         self.imageMenuRangeSave.triggered.connect(self.saveImageRange)
         self.imageMenuRange.addActions([self.imageMenuRangeLoad,self.imageMenuRangeSave])
         
         self.imageMenuPixelSize = self.imageMenu.addMenu('Set Pixel Size')
-        self.imageMenuPixelSizeXY = QtGui.QAction('XY',self.mainWin)
+        self.imageMenuPixelSizeXY = QtWidgets.QAction('XY',self.mainWin)
         self.imageMenuPixelSizeXY.triggered.connect(self.setPixelSize)
-        self.imageMenuPixelSizeZ = QtGui.QAction('Z',self.mainWin)
+        self.imageMenuPixelSizeZ = QtWidgets.QAction('Z',self.mainWin)
         self.imageMenuPixelSizeZ.triggered.connect(self.setPixelSize)
         self.imageMenuPixelSize.addActions([self.imageMenuPixelSizeXY,self.imageMenuPixelSizeZ])  
         
         self.imageMenuResample = self.imageMenu.addMenu('Resample')
-        self.imageMenuResamplePixelSize = QtGui.QAction('Using New Pixel Size',self.mainWin)
+        self.imageMenuResamplePixelSize = QtWidgets.QAction('Using New Pixel Size',self.mainWin)
         self.imageMenuResamplePixelSize.triggered.connect(self.resampleImage)
-        self.imageMenuResampleScaleFactor = QtGui.QAction('Using Scale Factor',self.mainWin)
+        self.imageMenuResampleScaleFactor = QtWidgets.QAction('Using Scale Factor',self.mainWin)
         self.imageMenuResampleScaleFactor.triggered.connect(self.resampleImage)
         self.imageMenuResample.addActions([self.imageMenuResamplePixelSize,self.imageMenuResampleScaleFactor])
         
         self.imageMenuFlip = self.imageMenu.addMenu('Flip')
         self.imageMenuFlipImg = self.imageMenuFlip.addMenu('Image')
-        self.imageMenuFlipImgHorz = QtGui.QAction('Horizontal',self.mainWin)
+        self.imageMenuFlipImgHorz = QtWidgets.QAction('Horizontal',self.mainWin)
         self.imageMenuFlipImgHorz.triggered.connect(self.flipImage)
-        self.imageMenuFlipImgVert = QtGui.QAction('Vertical',self.mainWin)
+        self.imageMenuFlipImgVert = QtWidgets.QAction('Vertical',self.mainWin)
         self.imageMenuFlipImgVert.triggered.connect(self.flipImage)
         self.imageMenuFlipImg.addActions([self.imageMenuFlipImgHorz,self.imageMenuFlipImgVert])
         self.imageMenuFlipVol = self.imageMenuFlip.addMenu('Volume')
-        self.imageMenuFlipVolX = QtGui.QAction('X',self.mainWin)
+        self.imageMenuFlipVolX = QtWidgets.QAction('X',self.mainWin)
         self.imageMenuFlipVolX.triggered.connect(self.flipImage)
-        self.imageMenuFlipVolY = QtGui.QAction('Y',self.mainWin)
+        self.imageMenuFlipVolY = QtWidgets.QAction('Y',self.mainWin)
         self.imageMenuFlipVolY.triggered.connect(self.flipImage)
-        self.imageMenuFlipVolZ = QtGui.QAction('Z',self.mainWin)
+        self.imageMenuFlipVolZ = QtWidgets.QAction('Z',self.mainWin)
         self.imageMenuFlipVolZ.triggered.connect(self.flipImage)
         self.imageMenuFlipVol.addActions([self.imageMenuFlipVolX,self.imageMenuFlipVolY,self.imageMenuFlipVolZ])
         
         self.imageMenuRotate = self.imageMenu.addMenu('Rotate')
-        self.imageMenuRotate90C = QtGui.QAction('90 Deg Clockwise',self.mainWin)
+        self.imageMenuRotate90C = QtWidgets.QAction('90 Deg Clockwise',self.mainWin)
         self.imageMenuRotate90C.triggered.connect(self.rotateImage)
-        self.imageMenuRotate90CC = QtGui.QAction('90 Deg Counter-Clockwise',self.mainWin)
+        self.imageMenuRotate90CC = QtWidgets.QAction('90 Deg Counter-Clockwise',self.mainWin)
         self.imageMenuRotate90CC.triggered.connect(self.rotateImage)
-        self.imageMenuRotateAngle = QtGui.QAction('Angle',self.mainWin)
+        self.imageMenuRotateAngle = QtWidgets.QAction('Angle',self.mainWin)
         self.imageMenuRotateAngle.triggered.connect(self.rotateImage)
-        self.imageMenuRotateLine = QtGui.QAction('To Line',self.mainWin)
+        self.imageMenuRotateLine = QtWidgets.QAction('To Line',self.mainWin)
         self.imageMenuRotateLine.triggered.connect(self.rotateImage)
         self.imageMenuRotate.addActions([self.imageMenuRotate90C,self.imageMenuRotate90CC,self.imageMenuRotateAngle,self.imageMenuRotateLine])
         
-        self.imageMenuSaveOffsets = QtGui.QAction('Save Offsets',self.mainWin)
+        self.imageMenuSaveOffsets = QtWidgets.QAction('Save Offsets',self.mainWin)
         self.imageMenuSaveOffsets.triggered.connect(self.saveOffsets)
         self.imageMenu.addAction(self.imageMenuSaveOffsets)
         
         self.imageMenuStitch = self.imageMenu.addMenu('Stitch')
         self.imageMenuStitchOverlay = self.imageMenuStitch.addMenu('Overlay')
-        self.imageMenuStitchOverlayMax = QtGui.QAction('Max',self.mainWin,checkable=True)
+        self.imageMenuStitchOverlayMax = QtWidgets.QAction('Max',self.mainWin,checkable=True)
         self.imageMenuStitchOverlayMax.setChecked(True)
         self.imageMenuStitchOverlayMax.triggered.connect(self.setStitchOverlayMode)
-        self.imageMenuStitchOverlayReplace = QtGui.QAction('Replace',self.mainWin,checkable=True)
+        self.imageMenuStitchOverlayReplace = QtWidgets.QAction('Replace',self.mainWin,checkable=True)
         self.imageMenuStitchOverlayReplace.triggered.connect(self.setStitchOverlayMode)
         self.imageMenuStitchOverlay.addActions([self.imageMenuStitchOverlayMax,self.imageMenuStitchOverlayReplace])
         
         self.imageMenuStitchTile = self.imageMenuStitch.addMenu('Tile')
-        self.imageMenuStitchTileXY = QtGui.QAction('XY',self.mainWin,checkable=True)
+        self.imageMenuStitchTileXY = QtWidgets.QAction('XY',self.mainWin,checkable=True)
         self.imageMenuStitchTileXY.setChecked(True)
         self.imageMenuStitchTileXY.triggered.connect(self.setStitchTileMode)
-        self.imageMenuStitchTileZ = QtGui.QAction('Z',self.mainWin,checkable=True)
+        self.imageMenuStitchTileZ = QtWidgets.QAction('Z',self.mainWin,checkable=True)
         self.imageMenuStitchTileZ.triggered.connect(self.setStitchTileMode)
         self.imageMenuStitchTile.addActions([self.imageMenuStitchTileXY,self.imageMenuStitchTileZ])        
         
-        self.imageMenuStitchLoad = QtGui.QAction('Load Postions',self.mainWin)
+        self.imageMenuStitchLoad = QtWidgets.QAction('Load Postions',self.mainWin)
         self.imageMenuStitchLoad.triggered.connect(self.loadStitchPositions)
-        self.imageMenuStitchSave = QtGui.QAction('Save Postions',self.mainWin)
+        self.imageMenuStitchSave = QtWidgets.QAction('Save Postions',self.mainWin)
         self.imageMenuStitchSave.triggered.connect(self.saveStitchPositions)
         self.imageMenuStitch.addActions([self.imageMenuStitchLoad,self.imageMenuStitchSave])
         
         self.imageMenuLocalAdjust = self.imageMenu.addMenu('Local Adjustments')
-        self.imageMenuLocalAdjustClear = QtGui.QAction('Clear History',self.mainWin)
+        self.imageMenuLocalAdjustClear = QtWidgets.QAction('Clear History',self.mainWin)
         self.imageMenuLocalAdjustClear.triggered.connect(self.clearLocalAdjustHistory)
-        self.imageMenuLocalAdjustSave = QtGui.QAction('Save History',self.mainWin)
+        self.imageMenuLocalAdjustSave = QtWidgets.QAction('Save History',self.mainWin)
         self.imageMenuLocalAdjustSave.triggered.connect(self.saveLocalAdjustHistory)
-        self.imageMenuLocalAdjustLoad = QtGui.QAction('Load and Apply',self.mainWin)
+        self.imageMenuLocalAdjustLoad = QtWidgets.QAction('Load and Apply',self.mainWin)
         self.imageMenuLocalAdjustLoad.triggered.connect(self.loadLocalAdjust)
         self.imageMenuLocalAdjust.addActions([self.imageMenuLocalAdjustClear,self.imageMenuLocalAdjustSave,self.imageMenuLocalAdjustLoad])
         
         self.imageMenuTransform = self.imageMenu.addMenu('Transform')
-        self.imageMenuTransformAligned = QtGui.QAction('Transform Aligned',self.mainWin)
+        self.imageMenuTransformAligned = QtWidgets.QAction('Transform Aligned',self.mainWin)
         self.imageMenuTransformAligned.triggered.connect(self.transformImage)
-        self.imageMenuTransformLoad = QtGui.QAction('Load Transform Matrix',self.mainWin)
+        self.imageMenuTransformLoad = QtWidgets.QAction('Load Transform Matrix',self.mainWin)
         self.imageMenuTransformLoad.triggered.connect(self.transformImage)
-        self.imageMenuTransformSave = QtGui.QAction('Save Transform Matrix',self.mainWin)
+        self.imageMenuTransformSave = QtWidgets.QAction('Save Transform Matrix',self.mainWin)
         self.imageMenuTransformSave.triggered.connect(self.saveTransformMatrix)
         self.imageMenuTransform.addActions([self.imageMenuTransformAligned,self.imageMenuTransformLoad,self.imageMenuTransformSave])
         
-        self.imageMenuWarp = QtGui.QAction('Warp',self.mainWin)
+        self.imageMenuWarp = QtWidgets.QAction('Warp',self.mainWin)
         self.imageMenuWarp.triggered.connect(self.warpImage)
         self.imageMenu.addAction(self.imageMenuWarp)
     
         self.imageMenuMakeCCF = self.imageMenu.addMenu('Make CCF Volume')
-        self.imageMenuMakeCCFNoIntp = QtGui.QAction('No Interpolation',self.mainWin)
+        self.imageMenuMakeCCFNoIntp = QtWidgets.QAction('No Interpolation',self.mainWin)
         self.imageMenuMakeCCFNoIntp.triggered.connect(self.makeCCFVolume)
-        self.imageMenuMakeCCFIntp = QtGui.QAction('Interpolate Z',self.mainWin)
+        self.imageMenuMakeCCFIntp = QtWidgets.QAction('Interpolate Z',self.mainWin)
         self.imageMenuMakeCCFIntp.triggered.connect(self.makeCCFVolume)
         self.imageMenuMakeCCF.addActions([self.imageMenuMakeCCFNoIntp,self.imageMenuMakeCCFIntp])        
         
@@ -297,74 +297,74 @@ class ImageGui():
         self.analysisMenu = self.menuBar.addMenu('Analysis')
         self.analysisMenuPoints = self.analysisMenu.addMenu('Points')
         
-        self.analysisMenuPointsLock = QtGui.QAction('Lock',self.mainWin,checkable=True)
+        self.analysisMenuPointsLock = QtWidgets.QAction('Lock',self.mainWin,checkable=True)
         self.analysisMenuPoints.addAction(self.analysisMenuPointsLock)
         
         self.analysisMenuPointsLine = self.analysisMenuPoints.addMenu('Line')
-        self.analysisMenuPointsLineNone = QtGui.QAction('None',self.mainWin,checkable=True)
+        self.analysisMenuPointsLineNone = QtWidgets.QAction('None',self.mainWin,checkable=True)
         self.analysisMenuPointsLineNone.setChecked(True)
         self.analysisMenuPointsLineNone.triggered.connect(self.setMarkedPointsLineStyle)
-        self.analysisMenuPointsLineLine = QtGui.QAction('Line',self.mainWin,checkable=True)
+        self.analysisMenuPointsLineLine = QtWidgets.QAction('Line',self.mainWin,checkable=True)
         self.analysisMenuPointsLineLine.triggered.connect(self.setMarkedPointsLineStyle)
-        self.analysisMenuPointsLinePoly = QtGui.QAction('Polygon',self.mainWin,checkable=True)
+        self.analysisMenuPointsLinePoly = QtWidgets.QAction('Polygon',self.mainWin,checkable=True)
         self.analysisMenuPointsLinePoly.triggered.connect(self.setMarkedPointsLineStyle)
         self.analysisMenuPointsLine.addActions([self.analysisMenuPointsLineNone,self.analysisMenuPointsLineLine,self.analysisMenuPointsLinePoly])
         
         self.analysisMenuPointsDraw = self.analysisMenuPoints.addMenu('Draw')
-        self.analysisMenuPointsDrawLine = QtGui.QAction('Line',self.mainWin)
+        self.analysisMenuPointsDrawLine = QtWidgets.QAction('Line',self.mainWin)
         self.analysisMenuPointsDrawLine.triggered.connect(self.drawLines)
-        self.analysisMenuPointsDrawPoly = QtGui.QAction('Polygon',self.mainWin)
+        self.analysisMenuPointsDrawPoly = QtWidgets.QAction('Polygon',self.mainWin)
         self.analysisMenuPointsDrawPoly.triggered.connect(self.drawLines)
-        self.analysisMenuPointsDrawTri = QtGui.QAction('Delauney Triangles',self.mainWin)
+        self.analysisMenuPointsDrawTri = QtWidgets.QAction('Delauney Triangles',self.mainWin)
         self.analysisMenuPointsDrawTri.triggered.connect(self.drawLines)
         self.analysisMenuPointsDraw.addActions([self.analysisMenuPointsDrawLine,self.analysisMenuPointsDrawPoly,self.analysisMenuPointsDrawTri])
 
         self.analysisMenuPointsCopy = self.analysisMenuPoints.addMenu('Copy')
-        self.analysisMenuPointsCopyFlip = QtGui.QAction('Flip Horizontal',self.mainWin)
+        self.analysisMenuPointsCopyFlip = QtWidgets.QAction('Flip Horizontal',self.mainWin)
         self.analysisMenuPointsCopyFlip.triggered.connect(self.copyPoints)
-        self.analysisMenuPointsCopyPrevious = QtGui.QAction('From Previous Image',self.mainWin)
+        self.analysisMenuPointsCopyPrevious = QtWidgets.QAction('From Previous Image',self.mainWin)
         self.analysisMenuPointsCopyPrevious.triggered.connect(self.copyPoints)
-        self.analysisMenuPointsCopyNext = QtGui.QAction('From Next Image',self.mainWin)
+        self.analysisMenuPointsCopyNext = QtWidgets.QAction('From Next Image',self.mainWin)
         self.analysisMenuPointsCopyNext.triggered.connect(self.copyPoints)
-        self.analysisMenuPointsCopyAlignedImg = QtGui.QAction('From Aligned Image',self.mainWin)
+        self.analysisMenuPointsCopyAlignedImg = QtWidgets.QAction('From Aligned Image',self.mainWin)
         self.analysisMenuPointsCopyAlignedImg.triggered.connect(self.copyRefPoints)
-        self.analysisMenuPointsCopyAlignedVol = QtGui.QAction('From Aligned Volume',self.mainWin)
+        self.analysisMenuPointsCopyAlignedVol = QtWidgets.QAction('From Aligned Volume',self.mainWin)
         self.analysisMenuPointsCopyAlignedVol.triggered.connect(self.copyRefPoints)
         self.analysisMenuPointsCopy.addActions([self.analysisMenuPointsCopyFlip,self.analysisMenuPointsCopyPrevious,self.analysisMenuPointsCopyNext,self.analysisMenuPointsCopyAlignedImg,self.analysisMenuPointsCopyAlignedVol])
         
-        self.analysisMenuPointsLoad = QtGui.QAction('Load',self.mainWin)
+        self.analysisMenuPointsLoad = QtWidgets.QAction('Load',self.mainWin)
         self.analysisMenuPointsLoad.triggered.connect(self.loadPoints)
-        self.analysisMenuPointsSave = QtGui.QAction('Save',self.mainWin)
+        self.analysisMenuPointsSave = QtWidgets.QAction('Save',self.mainWin)
         self.analysisMenuPointsSave.triggered.connect(self.savePoints)
-        self.analysisMenuPointsClear = QtGui.QAction('Clear',self.mainWin)
+        self.analysisMenuPointsClear = QtWidgets.QAction('Clear',self.mainWin)
         self.analysisMenuPointsClear.triggered.connect(self.clearPoints)
         self.analysisMenuPoints.addActions([self.analysisMenuPointsLoad,self.analysisMenuPointsSave,self.analysisMenuPointsClear])
         
-        self.analysisMenuPointsStretch = QtGui.QAction('Set Stretch Factor',self.mainWin)
+        self.analysisMenuPointsStretch = QtWidgets.QAction('Set Stretch Factor',self.mainWin)
         self.analysisMenuPointsStretch.triggered.connect(self.setMarkPointsStretchFactor)
         self.analysisMenuPoints.addAction(self.analysisMenuPointsStretch)
         
         self.analysisMenuContours = self.analysisMenu.addMenu('Contours')
         self.analysisMenuContoursFind = self.analysisMenuContours.addMenu('Find')
-        self.analysisMenuContoursFindContours = QtGui.QAction('Contours',self.mainWin)
+        self.analysisMenuContoursFindContours = QtWidgets.QAction('Contours',self.mainWin)
         self.analysisMenuContoursFindContours.triggered.connect(self.getContours)
-        self.analysisMenuContoursFindConvexHull = QtGui.QAction('Convex Hull',self.mainWin)
+        self.analysisMenuContoursFindConvexHull = QtWidgets.QAction('Convex Hull',self.mainWin)
         self.analysisMenuContoursFindConvexHull.triggered.connect(self.getContours)
-        self.analysisMenuContoursFindRectangle = QtGui.QAction('Bounding Rectangle',self.mainWin)
+        self.analysisMenuContoursFindRectangle = QtWidgets.QAction('Bounding Rectangle',self.mainWin)
         self.analysisMenuContoursFindRectangle.triggered.connect(self.getContours)
         self.analysisMenuContoursFind.addActions([self.analysisMenuContoursFindContours,self.analysisMenuContoursFindConvexHull,self.analysisMenuContoursFindRectangle])
         
         self.analysisMenuContoursMerge = self.analysisMenuContours.addMenu('Merge')
-        self.analysisMenuContoursMergeHorz = QtGui.QAction('Horizontal',self.mainWin,checkable=True)
+        self.analysisMenuContoursMergeHorz = QtWidgets.QAction('Horizontal',self.mainWin,checkable=True)
         self.analysisMenuContoursMergeHorz.triggered.connect(self.setMergeContours)
-        self.analysisMenuContoursMergeVert = QtGui.QAction('Vertical',self.mainWin,checkable=True)
+        self.analysisMenuContoursMergeVert = QtWidgets.QAction('Vertical',self.mainWin,checkable=True)
         self.analysisMenuContoursMergeVert.triggered.connect(self.setMergeContours)
         self.analysisMenuContoursMerge.addActions([self.analysisMenuContoursMergeHorz,self.analysisMenuContoursMergeVert])
         
-        self.analysisMenuContoursFill = QtGui.QAction('Show Filled',self.mainWin,checkable=True)
-        self.analysisMenuContoursMinVertices = QtGui.QAction('Minimum Vertices',self.mainWin)
+        self.analysisMenuContoursFill = QtWidgets.QAction('Show Filled',self.mainWin,checkable=True)
+        self.analysisMenuContoursMinVertices = QtWidgets.QAction('Minimum Vertices',self.mainWin)
         self.analysisMenuContoursMinVertices.triggered.connect(self.setMinContourVertices)
-        self.analysisMenuContoursSave = QtGui.QAction('Save ROIs as Images',self.mainWin)
+        self.analysisMenuContoursSave = QtWidgets.QAction('Save ROIs as Images',self.mainWin)
         self.analysisMenuContoursSave.triggered.connect(self.saveContours)
         self.analysisMenuContours.addActions([self.analysisMenuContoursFill,self.analysisMenuContoursMinVertices,self.analysisMenuContoursSave])
         
@@ -374,31 +374,31 @@ class ImageGui():
         self.atlasRegionLabels = ('SCs','LGd','LGv','LP','LD','VISal','VISam','VISl','VISp','VISpl','VISpm','VISli','VISpor','ACA','LA','BLA')
         self.atlasRegionMenu = []
         for region in self.atlasRegionLabels:
-            self.atlasRegionMenu.append(QtGui.QAction(region,self.mainWin,checkable=True))
+            self.atlasRegionMenu.append(QtWidgets.QAction(region,self.mainWin,checkable=True))
             self.atlasRegionMenu[-1].triggered.connect(self.setAtlasRegions)
         self.atlasMenuSelect.addActions(self.atlasRegionMenu)
         
-        self.atlasMenuClear = QtGui.QAction('Clear All',self.mainWin)
+        self.atlasMenuClear = QtWidgets.QAction('Clear All',self.mainWin)
         self.atlasMenuClear.triggered.connect(self.clearAtlasRegions)
         self.atlasMenu.addAction(self.atlasMenuClear)
         
         self.atlasMenuHemi = self.atlasMenu.addMenu('Hemisphere')
-        self.atlasMenuHemiBoth = QtGui.QAction('Both',self.mainWin,checkable=True)
+        self.atlasMenuHemiBoth = QtWidgets.QAction('Both',self.mainWin,checkable=True)
         self.atlasMenuHemiBoth.setChecked(True)
         self.atlasMenuHemiBoth.triggered.connect(self.setAtlasHemi)
-        self.atlasMenuHemiLeft = QtGui.QAction('Left',self.mainWin,checkable=True)
+        self.atlasMenuHemiLeft = QtWidgets.QAction('Left',self.mainWin,checkable=True)
         self.atlasMenuHemiLeft.triggered.connect(self.setAtlasHemi)
-        self.atlasMenuHemiRight = QtGui.QAction('Right',self.mainWin,checkable=True)
+        self.atlasMenuHemiRight = QtWidgets.QAction('Right',self.mainWin,checkable=True)
         self.atlasMenuHemiRight.triggered.connect(self.setAtlasHemi)
         self.atlasMenuHemi.addActions([self.atlasMenuHemiBoth,self.atlasMenuHemiLeft,self.atlasMenuHemiRight])
         
-        self.atlasRotateAnnotation = QtGui.QAction('Rotate Annotation Data',self.mainWin)
+        self.atlasRotateAnnotation = QtWidgets.QAction('Rotate Annotation Data',self.mainWin)
         self.atlasRotateAnnotation.triggered.connect(self.rotateAnnotationData)
-        self.atlasResetAnnotation = QtGui.QAction('Reset Annotation Data',self.mainWin)
+        self.atlasResetAnnotation = QtWidgets.QAction('Reset Annotation Data',self.mainWin)
         self.atlasResetAnnotation.triggered.connect(self.resetAnnotationData)
-        self.atlasMenuNorm = QtGui.QAction('Normalize Region Levels',self.mainWin)
+        self.atlasMenuNorm = QtWidgets.QAction('Normalize Region Levels',self.mainWin)
         self.atlasMenuNorm.triggered.connect(self.normRegionLevels)
-        self.atlasMenuZero = QtGui.QAction('Set Zero Outside Region',self.mainWin)
+        self.atlasMenuZero = QtWidgets.QAction('Set Zero Outside Region',self.mainWin)
         self.atlasMenuZero.triggered.connect(self.setOutsideRegionZero)
         self.atlasMenu.addActions([self.atlasRotateAnnotation,self.atlasResetAnnotation,self.atlasMenuNorm,self.atlasMenuZero])
         
@@ -425,26 +425,26 @@ class ImageGui():
                 line.sigDragged.connect(self.view3dSliceLineDragged)
         
         # file selection
-        self.fileListbox = QtGui.QListWidget()
-        self.fileListbox.setSelectionMode(QtGui.QAbstractItemView.ExtendedSelection)
+        self.fileListbox = QtWidgets.QListWidget()
+        self.fileListbox.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.fileListbox.itemSelectionChanged.connect(self.fileListboxSelectionCallback)
         self.fileListbox.itemClicked.connect(self.fileListboxItemClickedCallback)
         
-        self.moveFileDownButton = QtGui.QToolButton()
+        self.moveFileDownButton = QtWidgets.QToolButton()
         self.moveFileDownButton.setArrowType(QtCore.Qt.DownArrow)
         self.moveFileDownButton.clicked.connect(self.moveFileDownButtonCallback)
         
-        self.moveFileUpButton = QtGui.QToolButton()
+        self.moveFileUpButton = QtWidgets.QToolButton()
         self.moveFileUpButton.setArrowType(QtCore.Qt.UpArrow)
         self.moveFileUpButton.clicked.connect(self.moveFileUpButtonCallback)
         
-        self.removeFileButton = QtGui.QPushButton('Remove')
+        self.removeFileButton = QtWidgets.QPushButton('Remove')
         self.removeFileButton.clicked.connect(self.removeFileButtonCallback)
         
-        self.stitchCheckbox = QtGui.QCheckBox('Stitch')
+        self.stitchCheckbox = QtWidgets.QCheckBox('Stitch')
         self.stitchCheckbox.clicked.connect(self.stitchCheckboxCallback)
         
-        self.fileSelectLayout = QtGui.QGridLayout()
+        self.fileSelectLayout = QtWidgets.QGridLayout()
         self.fileSelectLayout.addWidget(self.moveFileDownButton,0,0,1,1)
         self.fileSelectLayout.addWidget(self.moveFileUpButton,0,1,1,1)
         self.fileSelectLayout.addWidget(self.removeFileButton,0,2,1,2)
@@ -452,68 +452,68 @@ class ImageGui():
         self.fileSelectLayout.addWidget(self.fileListbox,1,0,9,10)
         
         # window and channel selection
-        self.windowListbox = QtGui.QListWidget()
-        self.windowListbox.setSelectionMode(QtGui.QAbstractItemView.SingleSelection)
+        self.windowListbox = QtWidgets.QListWidget()
+        self.windowListbox.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.windowListbox.addItems(['Window '+str(n+1) for n in range(self.numWindows)])
         self.windowListbox.setCurrentRow(0)
         self.windowListbox.itemSelectionChanged.connect(self.windowListboxCallback)
         
-        self.linkWindowsCheckbox = QtGui.QCheckBox('Link Windows')
+        self.linkWindowsCheckbox = QtWidgets.QCheckBox('Link Windows')
         self.linkWindowsCheckbox.clicked.connect(self.linkWindowsCheckboxCallback)
         
-        self.channelListbox = QtGui.QListWidget()
-        self.channelListbox.setSelectionMode(QtGui.QAbstractItemView.ExtendedSelection)
+        self.channelListbox = QtWidgets.QListWidget()
+        self.channelListbox.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.channelListbox.itemSelectionChanged.connect(self.channelListboxCallback)
         
-        self.channelColorMenu = QtGui.QComboBox()
+        self.channelColorMenu = QtWidgets.QComboBox()
         self.channelColorMenu.addItems(('Channel Color','Gray','Red','Green','Blue','Magenta'))
         self.channelColorMenu.currentIndexChanged.connect(self.channelColorMenuCallback)
         
-        self.windowChannelLayout = QtGui.QGridLayout()
+        self.windowChannelLayout = QtWidgets.QGridLayout()
         self.windowChannelLayout.addWidget(self.linkWindowsCheckbox,0,0,1,1)
         self.windowChannelLayout.addWidget(self.windowListbox,1,0,4,1) 
         self.windowChannelLayout.addWidget(self.channelColorMenu,0,2,1,1)
         self.windowChannelLayout.addWidget(self.channelListbox,1,2,4,1)
         
         # view control
-        self.downsampleLabel = QtGui.QLabel('Display Downsample Interval')
-        self.downsampleEdit = QtGui.QLineEdit('1')
+        self.downsampleLabel = QtWidgets.QLabel('Display Downsample Interval')
+        self.downsampleEdit = QtWidgets.QLineEdit('1')
         self.downsampleEdit.setAlignment(QtCore.Qt.AlignHCenter)
         self.downsampleEdit.editingFinished.connect(self.downsampleEditCallback)
         
-        self.imageDimensionsLabel = QtGui.QLabel('XYZ Dimensions: ')
-        self.imagePixelSizeLabel = QtGui.QLabel('XYZ Pixel Size (\u03BCm): ')        
+        self.imageDimensionsLabel = QtWidgets.QLabel('XYZ Dimensions: ')
+        self.imagePixelSizeLabel = QtWidgets.QLabel('XYZ Pixel Size (\u03BCm): ')        
         
-        self.sliceButton = QtGui.QRadioButton('Slice')
+        self.sliceButton = QtWidgets.QRadioButton('Slice')
         self.sliceButton.setChecked(True)
-        self.projectionButton = QtGui.QRadioButton('Projection')
+        self.projectionButton = QtWidgets.QRadioButton('Projection')
         self.sliceProjButtons = (self.sliceButton,self.projectionButton)
-        self.sliceProjGroupLayout = QtGui.QVBoxLayout()
+        self.sliceProjGroupLayout = QtWidgets.QVBoxLayout()
         for button in self.sliceProjButtons:
             button.clicked.connect(self.sliceProjButtonCallback)
             self.sliceProjGroupLayout.addWidget(button)
-        self.sliceProjGroupBox = QtGui.QGroupBox()
+        self.sliceProjGroupBox = QtWidgets.QGroupBox()
         self.sliceProjGroupBox.setLayout(self.sliceProjGroupLayout)
         
-        self.xButton = QtGui.QRadioButton('X')
-        self.yButton = QtGui.QRadioButton('Y')
-        self.zButton = QtGui.QRadioButton('Z')
+        self.xButton = QtWidgets.QRadioButton('X')
+        self.yButton = QtWidgets.QRadioButton('Y')
+        self.zButton = QtWidgets.QRadioButton('Z')
         self.zButton.setChecked(True)
         self.xyzButtons = (self.xButton,self.yButton,self.zButton)
-        self.xyzGroupLayout = QtGui.QVBoxLayout()
+        self.xyzGroupLayout = QtWidgets.QVBoxLayout()
         for button in self.xyzButtons:
             button.clicked.connect(self.xyzButtonCallback)
             self.xyzGroupLayout.addWidget(button)
-        self.xyzGroupBox = QtGui.QGroupBox()
+        self.xyzGroupBox = QtWidgets.QGroupBox()
         self.xyzGroupBox.setLayout(self.xyzGroupLayout)
         
-        self.viewChannelsCheckbox = QtGui.QCheckBox('Channel View')
+        self.viewChannelsCheckbox = QtWidgets.QCheckBox('Channel View')
         self.viewChannelsCheckbox.clicked.connect(self.viewChannelsCheckboxCallback)
         
-        self.view3dCheckbox = QtGui.QCheckBox('3D View')
+        self.view3dCheckbox = QtWidgets.QCheckBox('3D View')
         self.view3dCheckbox.clicked.connect(self.view3dCheckboxCallback)
         
-        self.viewControlLayout = QtGui.QGridLayout()
+        self.viewControlLayout = QtWidgets.QGridLayout()
         self.viewControlLayout.addWidget(self.downsampleLabel,0,0,1,2)
         self.viewControlLayout.addWidget(self.downsampleEdit,0,2,1,1)
         self.viewControlLayout.addWidget(self.imageDimensionsLabel,1,0,1,3)
@@ -524,45 +524,45 @@ class ImageGui():
         self.viewControlLayout.addWidget(self.xyzGroupBox,3,2,3,1)
         
         # range control 
-        self.zoomPanButton = QtGui.QPushButton('Zoom/Pan',checkable=True)
+        self.zoomPanButton = QtWidgets.QPushButton('Zoom/Pan',checkable=True)
         self.zoomPanButton.clicked.connect(self.zoomPanButtonCallback)
 
-        self.roiButton = QtGui.QPushButton('ROI',checkable=True)
+        self.roiButton = QtWidgets.QPushButton('ROI',checkable=True)
         self.roiButton.clicked.connect(self.roiButtonCallback)         
         
-        self.resetViewButton = QtGui.QPushButton('Reset View')
+        self.resetViewButton = QtWidgets.QPushButton('Reset View')
         self.resetViewButton.clicked.connect(self.resetViewButtonCallback)
         
-        self.rangeViewLabel = QtGui.QLabel('View')
-        self.rangeMinLabel = QtGui.QLabel('Min')
-        self.rangeMaxLabel = QtGui.QLabel('Max')
+        self.rangeViewLabel = QtWidgets.QLabel('View')
+        self.rangeMinLabel = QtWidgets.QLabel('Min')
+        self.rangeMaxLabel = QtWidgets.QLabel('Max')
         for label in (self.rangeViewLabel,self.rangeMinLabel,self.rangeMaxLabel):
             label.setAlignment(QtCore.Qt.AlignHCenter)
         
-        self.xRangeLabel = QtGui.QLabel('X')
-        self.yRangeLabel = QtGui.QLabel('Y')
-        self.zRangeLabel = QtGui.QLabel('Z')
+        self.xRangeLabel = QtWidgets.QLabel('X')
+        self.yRangeLabel = QtWidgets.QLabel('Y')
+        self.zRangeLabel = QtWidgets.QLabel('Z')
         
-        self.xImageNumEdit = QtGui.QLineEdit('')
-        self.yImageNumEdit = QtGui.QLineEdit('')
-        self.zImageNumEdit = QtGui.QLineEdit('')
+        self.xImageNumEdit = QtWidgets.QLineEdit('')
+        self.yImageNumEdit = QtWidgets.QLineEdit('')
+        self.zImageNumEdit = QtWidgets.QLineEdit('')
         self.imageNumEditBoxes = (self.yImageNumEdit,self.xImageNumEdit,self.zImageNumEdit)
         for editBox in self.imageNumEditBoxes:
             editBox.setAlignment(QtCore.Qt.AlignHCenter)
             editBox.editingFinished.connect(self.imageNumEditCallback)
         
-        self.xRangeMinEdit = QtGui.QLineEdit('')
-        self.xRangeMaxEdit = QtGui.QLineEdit('')
-        self.yRangeMinEdit = QtGui.QLineEdit('')
-        self.yRangeMaxEdit = QtGui.QLineEdit('')
-        self.zRangeMinEdit = QtGui.QLineEdit('')
-        self.zRangeMaxEdit = QtGui.QLineEdit('')
+        self.xRangeMinEdit = QtWidgets.QLineEdit('')
+        self.xRangeMaxEdit = QtWidgets.QLineEdit('')
+        self.yRangeMinEdit = QtWidgets.QLineEdit('')
+        self.yRangeMaxEdit = QtWidgets.QLineEdit('')
+        self.zRangeMinEdit = QtWidgets.QLineEdit('')
+        self.zRangeMaxEdit = QtWidgets.QLineEdit('')
         self.rangeEditBoxes = ((self.yRangeMinEdit,self.yRangeMaxEdit),(self.xRangeMinEdit,self.xRangeMaxEdit),(self.zRangeMinEdit,self.zRangeMaxEdit))
         for editBox in (box for boxes in self.rangeEditBoxes for box in boxes):
             editBox.setAlignment(QtCore.Qt.AlignHCenter)
             editBox.editingFinished.connect(self.rangeEditCallback)
         
-        self.rangeControlLayout = QtGui.QGridLayout()
+        self.rangeControlLayout = QtWidgets.QGridLayout()
         self.rangeControlLayout.addWidget(self.zoomPanButton,0,0,1,4)
         self.rangeControlLayout.addWidget(self.roiButton,0,4,1,4)
         self.rangeControlLayout.addWidget(self.resetViewButton,0,8,1,4)
@@ -601,34 +601,34 @@ class ImageGui():
         self.levelsPlotItem.addItem(self.highLevelLine)
         
         # levels control
-        self.showNoLevelsButton = QtGui.QRadioButton('None')
+        self.showNoLevelsButton = QtWidgets.QRadioButton('None')
         self.showNoLevelsButton.setChecked(True)
-        self.showVolumeLevelsButton = QtGui.QRadioButton('Volume')
-        self.showImageLevelsButton = QtGui.QRadioButton('Image')
-        self.showLevelsGroupLayout = QtGui.QHBoxLayout()
+        self.showVolumeLevelsButton = QtWidgets.QRadioButton('Volume')
+        self.showImageLevelsButton = QtWidgets.QRadioButton('Image')
+        self.showLevelsGroupLayout = QtWidgets.QHBoxLayout()
         for button in (self.showNoLevelsButton,self.showVolumeLevelsButton,self.showImageLevelsButton):
             button.clicked.connect(self.showLevelsButtonCallback)
             self.showLevelsGroupLayout.addWidget(button)
-        self.showLevelsGroupBox = QtGui.QGroupBox()
+        self.showLevelsGroupBox = QtWidgets.QGroupBox()
         self.showLevelsGroupBox.setLayout(self.showLevelsGroupLayout)
         self.showLevelsGroupBox.setMinimumWidth(10)
         self.showLevelsGroupBox.setMinimumWidth(125)
         
-        self.lowLevelBox = QtGui.QSpinBox()
+        self.lowLevelBox = QtWidgets.QSpinBox()
         self.lowLevelBox.setPrefix('Low Level:  ')
         self.lowLevelBox.setRange(0,254)
         self.lowLevelBox.setSingleStep(1)
         self.lowLevelBox.setValue(0)
         self.lowLevelBox.valueChanged.connect(self.lowLevelBoxCallback)
         
-        self.highLevelBox = QtGui.QSpinBox()
+        self.highLevelBox = QtWidgets.QSpinBox()
         self.highLevelBox.setPrefix('High Level:  ')
         self.highLevelBox.setRange(1,255)
         self.highLevelBox.setSingleStep(1)
         self.highLevelBox.setValue(255)
         self.highLevelBox.valueChanged.connect(self.highLevelBoxCallback)
         
-        self.gammaBox = QtGui.QDoubleSpinBox()
+        self.gammaBox = QtWidgets.QDoubleSpinBox()
         self.gammaBox.setPrefix('Gamma:  ')
         self.gammaBox.setDecimals(2)
         self.gammaBox.setRange(0.05,3)
@@ -636,7 +636,7 @@ class ImageGui():
         self.gammaBox.setValue(1)
         self.gammaBox.valueChanged.connect(self.gammaBoxCallback)
         
-        self.alphaBox = QtGui.QDoubleSpinBox()
+        self.alphaBox = QtWidgets.QDoubleSpinBox()
         self.alphaBox.setPrefix('Alpha:  ')
         self.alphaBox.setDecimals(2)
         self.alphaBox.setRange(0,1)
@@ -646,16 +646,16 @@ class ImageGui():
         
         self.levelsBoxes = (self.lowLevelBox,self.highLevelBox,self.gammaBox,self.alphaBox)
         
-        self.resetLevelsButton = QtGui.QPushButton('Reset Levels')
+        self.resetLevelsButton = QtWidgets.QPushButton('Reset Levels')
         self.resetLevelsButton.clicked.connect(self.resetLevelsButtonCallback)
         
-        self.normDisplayCheckbox = QtGui.QCheckBox('Normalize Display')
+        self.normDisplayCheckbox = QtWidgets.QCheckBox('Normalize Display')
         self.normDisplayCheckbox.clicked.connect(self.normDisplayCheckboxCallback)
         
-        self.showBinaryCheckbox = QtGui.QCheckBox('Show Binary Image')
+        self.showBinaryCheckbox = QtWidgets.QCheckBox('Show Binary Image')
         self.showBinaryCheckbox.clicked.connect(self.showBinaryCheckboxCallback)
         
-        self.levelsControlLayout = QtGui.QGridLayout()
+        self.levelsControlLayout = QtWidgets.QGridLayout()
         self.levelsControlLayout.addWidget(self.showLevelsGroupBox,0,0,1,2)
         self.levelsControlLayout.addWidget(self.lowLevelBox,1,0,1,1)
         self.levelsControlLayout.addWidget(self.highLevelBox,1,1,1,1)
@@ -666,42 +666,42 @@ class ImageGui():
         self.levelsControlLayout.addWidget(self.showBinaryCheckbox,4,1,1,1)
         
         # mark points tab        
-        self.markPointsTable = QtGui.QTableWidget(1,3)
+        self.markPointsTable = QtWidgets.QTableWidget(1,3)
         self.markPointsTable.resizeEvent = self.markPointsTableResizeCallback
         self.markPointsTable.keyPressEvent = self.markPointsTableKeyPressCallback
         self.markPointsTable.itemSelectionChanged.connect(self.markPointsTableSelectionCallback)
         self.markPointsTable.setHorizontalHeaderLabels(['X','Y','Z'])
         for col in range(3):
-            item = QtGui.QTableWidgetItem('')
+            item = QtWidgets.QTableWidgetItem('')
             item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
             self.markPointsTable.setItem(0,col,item)
-        self.markPointsLayout = QtGui.QGridLayout()
+        self.markPointsLayout = QtWidgets.QGridLayout()
         self.markPointsLayout.addWidget(self.markPointsTable,0,0,1,1)
-        self.markPointsTab = QtGui.QWidget()
+        self.markPointsTab = QtWidgets.QWidget()
         self.markPointsTab.setLayout(self.markPointsLayout)
-        self.tabs = QtGui.QTabWidget()
+        self.tabs = QtWidgets.QTabWidget()
         self.tabs.addTab(self.markPointsTab,'Mark Points')
         
         # align tab
-        self.alignRefLabel = QtGui.QLabel('Reference')
-        self.alignRefMenu = QtGui.QComboBox()
+        self.alignRefLabel = QtWidgets.QLabel('Reference')
+        self.alignRefMenu = QtWidgets.QComboBox()
         self.alignRefMenu.addItems(['Window '+str(n+1) for n in range(self.numWindows)])
         self.alignRefMenu.setCurrentIndex(0)
         
-        self.alignStartLabel = QtGui.QLabel('Start')
-        self.alignStartEdit = QtGui.QLineEdit('')
+        self.alignStartLabel = QtWidgets.QLabel('Start')
+        self.alignStartEdit = QtWidgets.QLineEdit('')
         self.alignStartEdit.setAlignment(QtCore.Qt.AlignHCenter)
         self.alignStartEdit.editingFinished.connect(self.alignStartEditCallback)
         
-        self.alignEndLabel = QtGui.QLabel('End')
-        self.alignEndEdit = QtGui.QLineEdit('')
+        self.alignEndLabel = QtWidgets.QLabel('End')
+        self.alignEndEdit = QtWidgets.QLineEdit('')
         self.alignEndEdit.setAlignment(QtCore.Qt.AlignHCenter)
         self.alignEndEdit.editingFinished.connect(self.alignEndEditCallback)
         
-        self.alignCheckbox = QtGui.QCheckBox('Align')
+        self.alignCheckbox = QtWidgets.QCheckBox('Align')
         self.alignCheckbox.clicked.connect(self.alignCheckboxCallback)
         
-        self.alignLayout = QtGui.QGridLayout()
+        self.alignLayout = QtWidgets.QGridLayout()
         self.alignLayout.addWidget(self.alignRefLabel,0,0,1,1)
         self.alignLayout.addWidget(self.alignRefMenu,0,1,1,1)
         self.alignLayout.addWidget(self.alignStartLabel,1,0,1,1)
@@ -709,14 +709,14 @@ class ImageGui():
         self.alignLayout.addWidget(self.alignEndLabel,2,0,1,1)
         self.alignLayout.addWidget(self.alignEndEdit,2,1,1,1)
         self.alignLayout.addWidget(self.alignCheckbox,3,1,1,1)
-        self.alignTab = QtGui.QWidget()
+        self.alignTab = QtWidgets.QWidget()
         self.alignTab.setLayout(self.alignLayout)
         self.tabs.addTab(self.alignTab,'Align')
         
         # main layout
-        self.mainWidget = QtGui.QWidget()
+        self.mainWidget = QtWidgets.QWidget()
         self.mainWin.setCentralWidget(self.mainWidget)
-        self.mainLayout = QtGui.QGridLayout()
+        self.mainLayout = QtWidgets.QGridLayout()
         setLayoutGridSpacing(self.mainLayout,winHeight,winWidth,4,4)
         self.mainWidget.setLayout(self.mainLayout)
         self.mainLayout.addWidget(self.imageLayout,0,0,4,2)
@@ -734,7 +734,7 @@ class ImageGui():
         
     def setLineColor(self):
         sender = self.mainWin.sender()
-        color,ok = QtGui.QInputDialog.getItem(self.mainWin,'Set Line Color','Choose Color',self.plotColorOptions,editable=False)
+        color,ok = QtWidgets.QInputDialog.getItem(self.mainWin,'Set Line Color','Choose Color',self.plotColorOptions,editable=False)
         if not ok:
             return
         color = self.plotColors[self.plotColorOptions.index(color)]
@@ -778,7 +778,7 @@ class ImageGui():
         plt.show()
     
     def saveImage(self):
-        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'Image (*.tif  *png *.jpg)')
+        filePath,fileType = QtWidgets.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'Image (*.tif  *png *.jpg)')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
@@ -798,7 +798,7 @@ class ImageGui():
             fileType = '*.npz'
         else:
             fileType = '*.mat'
-        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,fileType)
+        filePath,fileType = QtWidgets.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,fileType)
         if filePath=='':
             return
         fileType = filePath[-3:]
@@ -808,7 +808,7 @@ class ImageGui():
         yRange,xRange,zRange = [self.imageRange[self.selectedWindow][ax] for ax in self.imageShapeIndex[self.selectedWindow]]
         volumeShape = tuple(r[1]-r[0]+1 for r in (yRange,xRange,zRange))
         if fileType=='avi':
-            frameRate,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Set Frame Rate','Frames/s',30)
+            frameRate,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Set Frame Rate','Frames/s',30)
             if not ok:
                 return
             vidOut = cv2.VideoWriter(filePath,-1,frameRate,volumeShape[1::-1])
@@ -847,12 +847,12 @@ class ImageGui():
         return True
                    
     def openImageFiles(self):
-        filePaths,fileType = QtGui.QFileDialog.getOpenFileNames(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image Data (*.tif *.btf *.png *.jpg *.jp2 *.npy *.npz *.nrrd *.nii)')
+        filePaths,fileType = QtWidgets.QFileDialog.getOpenFileNames(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image Data (*.tif *.btf *.png *.jpg *.jp2 *.npy *.npz *.nrrd *.nii)')
         if len(filePaths)>0:
             self.loadImageFiles(filePaths,fileType)
             
     def openImageSeries(self):
-        filePaths,fileType = QtGui.QFileDialog.getOpenFileNames(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image Series (*.tif *.btf *.png *.jpg *.jp2);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml)',self.fileSeriesType)
+        filePaths,fileType = QtWidgets.QFileDialog.getOpenFileNames(self.mainWin,'Choose File(s)',self.fileOpenPath,'Image Series (*.tif *.btf *.png *.jpg *.jp2);;Bruker Dir (*.xml);;Bruker Dir + Siblings (*.xml)',self.fileSeriesType)
         if len(filePaths)>0:
             self.fileSeriesType = fileType
             self.loadImageFiles(filePaths,fileType)
@@ -866,11 +866,11 @@ class ImageGui():
         isMappable = any(True for f in filePaths if os.path.splitext(f)[1] in ('.tif','.btf'))
         if fileType=='Image Series (*.tif *.btf *.png *.jpg *.jp2)':
             filePaths = [filePaths]
-            chFileOrg,ok = QtGui.QInputDialog.getItem(self.mainWin,'Import Image Series','Channel file organization:',('rgb','alternating','blocks'))
+            chFileOrg,ok = QtWidgets.QInputDialog.getItem(self.mainWin,'Import Image Series','Channel file organization:',('rgb','alternating','blocks'))
             if not ok:
                 return
             if chFileOrg in ('alternating','blocks'):
-                numCh,ok = QtGui.QInputDialog.getInt(self.mainWin,'Import Image Series','Number of channels:',1,min=1)
+                numCh,ok = QtWidgets.QInputDialog.getInt(self.mainWin,'Import Image Series','Number of channels:',1,min=1)
                 if not ok:
                     return
                 if len(filePaths[0])%numCh>0:
@@ -1072,7 +1072,7 @@ class ImageGui():
             self.displayImage()
             
     def changeBackground(self):
-        thresh,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Set Threshold','fraction above/below min/max:',0,min=0,max=1,decimals=3)
+        thresh,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Set Threshold','fraction above/below min/max:',0,min=0,max=1,decimals=3)
         if not ok:
             return
         option = 'b2w' if self.mainWin.sender() is self.imageMenuBackgroundBtoW else 'w2b'
@@ -1089,7 +1089,7 @@ class ImageGui():
         else:
             dim = 'Z'
             ind = (2,)
-        val,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Set '+dim+' Pixel Size','\u03BCm/pixel:',0,min=0,decimals=4)
+        val,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Set '+dim+' Pixel Size','\u03BCm/pixel:',0,min=0,decimals=4)
         if ok and val>0:
             for fileInd in self.selectedFileIndex:
                 for i in ind:
@@ -1101,11 +1101,11 @@ class ImageGui():
         if sender==self.imageMenuResamplePixelSize:
             if any(self.imageObjs[fileInd].pixelSize[0] is None for fileInd in self.selectedFileIndex):
                 raise Exception('Must define pixel size before using new pixel size for resampling')
-            newPixelSize,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Resample Pixel Size','\u03BCm/pixel:',0,min=0,decimals=4)
+            newPixelSize,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Resample Pixel Size','\u03BCm/pixel:',0,min=0,decimals=4)
             if not ok or newPixelSize==0:
                 return
         else:
-            scaleFactor,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Resample Scale Factor','scale factor (new/old size):',1,min=0.001,decimals=4)
+            scaleFactor,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Resample Scale Factor','scale factor (new/old size):',1,min=0.001,decimals=4)
             if not ok or scaleFactor==1:
                 return
         self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()            
@@ -1169,7 +1169,7 @@ class ImageGui():
         else:
             pts = self.markedPoints[self.selectedWindow]
             if sender is self.imageMenuRotateAngle:
-                angle,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Rotation Angle','degrees:',0,decimals=2)
+                angle,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Rotation Angle','degrees:',0,decimals=2)
                 if not ok or angle==0:
                     return
                 self.rotationAngle = [angle]
@@ -1227,7 +1227,7 @@ class ImageGui():
     def saveOffsets(self):
         if len(self.selectedFileIndex)>1:
             raise Exception('Select a single image object to return its offsets')
-        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
+        filePath,fileType = QtWidgets.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
         if filePath=='':
             return
         offset = self.imageObjs[self.selectedFileIndex[0]].getOffsets()
@@ -1237,14 +1237,14 @@ class ImageGui():
         self.localAdjustHistory = [[] for _ in range(self.numWindows)]
     
     def saveLocalAdjustHistory(self):
-        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npz')
+        filePath,fileType = QtWidgets.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npz')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
         np.savez(filePath,*self.localAdjustHistory[self.selectedWindow])
     
     def loadLocalAdjust(self):
-        filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npz')
+        filePath,fileType = QtWidgets.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npz')
         if filePath=='':
             return
         self.fileOpenPath = os.path.dirname(filePath)
@@ -1252,13 +1252,13 @@ class ImageGui():
         localAdjustHistory = [f[key] for key in f.keys()]
         currentPixelSize = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]].pixelSize[0]
         if currentPixelSize is None:
-            currentPixelSize,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Set Current XY Pixel Size','\u03BCm/pixel:',0,min=0,decimals=4)
+            currentPixelSize,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Set Current XY Pixel Size','\u03BCm/pixel:',0,min=0,decimals=4)
             if not ok or currentPixelSize==0:
                 return
             for fileInd in self.checkedFileIndex[self.selectedWindow]:
                 self.imageObjs[fileInd].pixelSize[:2] = [currentPixelSize]*2
             self.displayPixelSize()        
-        newPixelSize,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Set New XY Pixel Size','\u03BCm/pixel:',currentPixelSize,min=0,decimals=4)
+        newPixelSize,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Set New XY Pixel Size','\u03BCm/pixel:',currentPixelSize,min=0,decimals=4)
         if not ok or newPixelSize==0:
             return
         scaleFactor = currentPixelSize/newPixelSize
@@ -1314,7 +1314,7 @@ class ImageGui():
             self.transformShape = tuple(self.imageShape[refWin][i] for i in self.imageShapeIndex[refWin][:2])+(rng[1]-rng[0]+1,)
             self.transformMatrix = np.zeros((rng[1]-rng[0]+1,2,3),dtype=np.float32)
         else:
-            filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npz')
+            filePath,fileType = QtWidgets.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npz')
             if filePath=='':
                 return
             self.fileOpenPath = os.path.dirname(filePath)
@@ -1354,7 +1354,7 @@ class ImageGui():
         self.displayImage()
         
     def saveTransformMatrix(self):
-        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npz')
+        filePath,fileType = QtWidgets.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npz')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
@@ -1684,7 +1684,7 @@ class ImageGui():
         
     def setAtlasRegions(self):
         if self.atlasAnnotationData is None:
-            filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose Annotation Data File',self.fileOpenPath,'*.nrrd')
+            filePath,fileType = QtWidgets.QFileDialog.getOpenFileName(self.mainWin,'Choose Annotation Data File',self.fileOpenPath,'*.nrrd')
             if filePath=='':
                 self.resetAtlasRegionMenu()
                 return
@@ -1692,7 +1692,7 @@ class ImageGui():
             self.atlasAnnotationData,_ = nrrd.read(filePath)
             self.atlasAnnotationData = self.atlasAnnotationData.transpose((1,2,0))
         if self.atlasAnnotationRegions is None:
-            filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose Annotation Region Hierarchy File',self.fileOpenPath,'*.xml')
+            filePath,fileType = QtWidgets.QFileDialog.getOpenFileName(self.mainWin,'Choose Annotation Region Hierarchy File',self.fileOpenPath,'*.xml')
             if filePath=='':
                 self.resetAtlasRegionMenu()
                 return
@@ -2145,7 +2145,7 @@ class ImageGui():
             option.setChecked(option is sender)
             
     def loadStitchPositions(self):
-        filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npy')
+        filePath,fileType = QtWidgets.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npy')
         if filePath=='':
             return
         self.fileOpenPath = os.path.dirname(filePath)
@@ -2153,7 +2153,7 @@ class ImageGui():
         self.initStitch()
     
     def saveStitchPositions(self):
-        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
+        filePath,fileType = QtWidgets.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
@@ -2301,7 +2301,7 @@ class ImageGui():
         if len(self.checkedFileIndex[self.selectedWindow])>0:
             numCh = max(self.imageObjs[i].shape[3] for i in self.checkedFileIndex[self.selectedWindow])
             for ch in range(numCh):
-                item = QtGui.QListWidgetItem('Ch '+str(ch+1),self.channelListbox)
+                item = QtWidgets.QListWidgetItem('Ch '+str(ch+1),self.channelListbox)
                 if ch in self.selectedChannels[self.selectedWindow]:
                     item.setSelected(True)
         self.channelListbox.blockSignals(False)
@@ -2361,7 +2361,7 @@ class ImageGui():
         self.channelListbox.blockSignals(True)
         self.viewChannelsSelectedCh = self.selectedChannels[self.selectedWindow][0]
         self.channelListbox.setCurrentRow(self.viewChannelsSelectedCh)
-        self.channelListbox.setSelectionMode(QtGui.QAbstractItemView.SingleSelection)
+        self.channelListbox.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.channelListbox.blockSignals(False)
         numCh = min(self.numWindows,max(self.imageObjs[i].shape[3] for i in self.checkedFileIndex[self.selectedWindow]))
         self.selectedChannels[:numCh] = [[ch] for ch in range(numCh)]
@@ -2373,7 +2373,7 @@ class ImageGui():
         
     def setViewChannelsOff(self):
         self.viewChannelsCheckbox.setChecked(False)
-        self.channelListbox.setSelectionMode(QtGui.QAbstractItemView.ExtendedSelection)
+        self.channelListbox.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.setLinkedViewOff()
     
     def view3dCheckboxCallback(self):
@@ -2608,14 +2608,14 @@ class ImageGui():
                 self.alignWindows(window,axis)
         
     def saveImageRange(self):
-        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
+        filePath,fileType = QtWidgets.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
         np.save(filePath,self.imageRange[self.selectedWindow])
     
     def loadImageRange(self):
-        filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npy')
+        filePath,fileType = QtWidgets.QFileDialog.getOpenFileName(self.mainWin,'Choose File',self.fileOpenPath,'*.npy')
         if filePath=='':
             return
         self.fileOpenPath = os.path.dirname(filePath)
@@ -2773,7 +2773,7 @@ class ImageGui():
                 pt = [str(round(self.markedPoints[self.selectedWindow][row,i],2)+1) for i in (1,0,2)]
                 for col in range(self.markPointsTable.columnCount()):
                     if row>0:
-                        item = QtGui.QTableWidgetItem(pt[col])
+                        item = QtWidgets.QTableWidgetItem(pt[col])
                         item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
                         self.markPointsTable.setItem(row,col,item)
                     else:
@@ -2874,7 +2874,7 @@ class ImageGui():
         self.plotMarkedPoints([self.selectedWindow])
         
     def loadPoints(self):
-        filePath,fileType = QtGui.QFileDialog.getOpenFileName(self.mainWin,'Choose saved points file',self.fileOpenPath,'*.npy')
+        filePath,fileType = QtWidgets.QFileDialog.getOpenFileName(self.mainWin,'Choose saved points file',self.fileOpenPath,'*.npy')
         if filePath=='':
             return
         self.fileOpenPath = os.path.dirname(filePath)
@@ -2889,7 +2889,7 @@ class ImageGui():
         self.plotMarkedPoints()
         
     def savePoints(self):
-        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
+        filePath,fileType = QtWidgets.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
@@ -2899,7 +2899,7 @@ class ImageGui():
         self.clearMarkedPoints()
         
     def setMarkPointsStretchFactor(self):
-        stretch,ok = QtGui.QInputDialog.getDouble(self.mainWin,'Set Stretch Factor','stretch factor:',self.markPointsStretchFactor,min=0.00001,decimals=5)
+        stretch,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Set Stretch Factor','stretch factor:',self.markPointsStretchFactor,min=0.00001,decimals=5)
         if not ok:
             return
         self.stretchPoints(stretch/self.markPointsStretchFactor)
@@ -2929,7 +2929,7 @@ class ImageGui():
         
     def markPointsTableKeyPressCallback(self,event):
         key = event.key()
-        modifiers = QtGui.QApplication.keyboardModifiers()
+        modifiers = QtWidgets.QApplication.keyboardModifiers()
         if key==QtCore.Qt.Key_C and int(modifiers & QtCore.Qt.ControlModifier)>0:
             selected = self.markPointsTable.selectedRanges()
             contents = ''
@@ -3062,7 +3062,7 @@ class ImageGui():
         self.imageItem[self.selectedWindow].setImage(image.transpose((1,0,2)),levels=[0,255])
         
     def setMinContourVertices(self):
-        n,ok = QtGui.QInputDialog.getInt(self.mainWin,'Select','Minimum number of contour vertices',self.minContourVertices,min=1)
+        n,ok = QtWidgets.QInputDialog.getInt(self.mainWin,'Select','Minimum number of contour vertices',self.minContourVertices,min=1)
         if ok:
             self.minContourVertices = n
             
@@ -3075,7 +3075,7 @@ class ImageGui():
                 self.analysisMenuContoursMergeHorz.setChecked(False)
     
     def saveContours(self):
-        filePath,fileType = QtGui.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'Image (*.tif *.png *.jpg)')
+        filePath,fileType = QtWidgets.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'Image (*.tif *.png *.jpg)')
         if filePath=='':
             return
         self.fileSavePath = os.path.dirname(filePath)
