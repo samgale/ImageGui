@@ -371,7 +371,7 @@ class ImageGui():
         # atlas menu
         self.atlasMenu = self.menuBar.addMenu('Atlas')
         self.atlasMenuSelect = self.atlasMenu.addMenu('Select Regions')
-        self.atlasRegionLabels = ('SCs','LGd','LGv','LP','LD','VISal','VISam','VISl','VISp','VISpl','VISpm','VISli','VISpor','ACA','LA','BLA')
+        self.atlasRegionLabels = ('SCs','LGd','LGv','LP','LD','VISa','VISal','VISam','VISl','VISli','VISp','VISpl','VISpm','VISpor','VISrl','ACA','LA','BLA')
         self.atlasRegionMenu = []
         for region in self.atlasRegionLabels:
             self.atlasRegionMenu.append(QtWidgets.QAction(region,self.mainWin,checkable=True))
@@ -2912,7 +2912,7 @@ class ImageGui():
         if rows.size>1:
             col = axes[0]
             y = self.markedPoints[self.selectedWindow][rows,col]
-            y0 = y.max()
+            y0 = y.min()
             y -= y0
             y *= stretch
             y += y0
