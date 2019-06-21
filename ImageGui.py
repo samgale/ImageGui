@@ -84,6 +84,8 @@ class ImageGui():
         self.markedPoints = [None]*self.numWindows
         self.markPointsSize = 5
         self.markPointsColor = (1,1,0)
+        self.markPointsColorMap = 'plasma'
+        self.markPointsColorValues = [None]*self.numWindows
         self.markPointsStretchFactor = 1
         self.selectedPoint = None
         self.alignRefWindow = [None]*self.numWindows
@@ -340,9 +342,13 @@ class ImageGui():
         self.analysisMenuPointsClear.triggered.connect(self.clearPoints)
         self.analysisMenuPoints.addActions([self.analysisMenuPointsLoad,self.analysisMenuPointsSave,self.analysisMenuPointsClear])
         
+        self.analysisMenuPointsSetColorMap = QtWidgets.QAction('Set Color Map',self.mainWin)
+        self.analysisMenuPointsSetColorMap.triggered.connect(self.setPointsColorMap)
+        self.analysisMenuPointsApplyColorMap = QtWidgets.QAction('Apply Color Map',self.mainWin)
+        self.analysisMenuPointsApplyColorMap.triggered.connect(self.applyPointsColorMap)
         self.analysisMenuPointsStretch = QtWidgets.QAction('Set Stretch Factor',self.mainWin)
-        self.analysisMenuPointsStretch.triggered.connect(self.setMarkPointsStretchFactor)
-        self.analysisMenuPoints.addAction(self.analysisMenuPointsStretch)
+        self.analysisMenuPointsStretch.triggered.connect(self.setPointsStretchFactor)
+        self.analysisMenuPoints.addActions([self.analysisMenuPointsSetColorMap,self.analysisMenuPointsApplyColorMap,self.analysisMenuPointsStretch])
         
         self.analysisMenuContours = self.analysisMenu.addMenu('Contours')
         self.analysisMenuContoursFind = self.analysisMenuContours.addMenu('Find')
@@ -2738,8 +2744,12 @@ class ImageGui():
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow] 
         for window in windows:
             x,y = self.getPlotPoints(window)
-            color = tuple(255*c for c in self.markPointsColor)
-            pen = None if self.analysisMenuPointsLineNone.isChecked() else color
+            if self.markPointsColorValues[window] is None:
+                color = tuple(255*c for c in self.markPointsColor)
+                pen = None if self.analysisMenuPointsLineNone.isChecked() else color
+            else:
+                color = self.markPointsColorValues[window]
+                pen = None
             self.markPointsPlot[window].setData(x=x,y=y,pen=pen,symbolSize=self.markPointsSize,symbolPen=color)
             
     def getPlotPoints(self,window):
@@ -2789,6 +2799,7 @@ class ImageGui():
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
         for window in windows:
             self.markedPoints[window] = None
+            self.markPointsColorValues[window] = None
             if window==self.selectedWindow:
                 self.clearPointsTable()
         self.setSelectedPoint(None)
@@ -2884,6 +2895,7 @@ class ImageGui():
         windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
         for window in windows:
             self.markedPoints[window] = pts
+            self.markPointsColorValues[window] = None
         self.markPointsStretchFactor = 1
         self.fillPointsTable()
         self.plotMarkedPoints()
@@ -2898,7 +2910,33 @@ class ImageGui():
     def clearPoints(self):
         self.clearMarkedPoints()
         
-    def setMarkPointsStretchFactor(self):
+    def setPointsColorMap(self):
+        colormap,ok = QtWidgets.QInputDialog.getItem(self.mainWin,'Set Color Map','Choose',('plasma','YlOrRd','jet'),editable=False)
+        if not ok:
+            return
+        self.markPointsColorMap = colormap
+        for window in self.displayedWindows:
+            if self.markedPoints[window] is not None and self.markPointsColorValues[window] is not None:
+                self.plotMarkedPoints([window])
+        
+    def applyPointsColorMap(self):
+        if self.markedPoints[self.selectedWindow] is None:
+            return
+        filePath,fileType = QtWidgets.QFileDialog.getOpenFileName(self.mainWin,'Choose file with values for each point',self.fileOpenPath,'*.npy')
+        if filePath=='':
+            return
+        self.fileOpenPath = os.path.dirname(filePath)
+        vals = np.load(filePath)
+        if vals.size==self.markedPoints[self.selectedWindow].shape[0]:
+            vals = vals.astype(float)
+            vals -= vals.min()
+            vals /= vals.max()
+            self.markPointsColorValues[self.selectedWindow] = getattr(matplotlib.cm,self.markPointsColorMap)(vals)[:,:3]
+        else:
+            self.markPointsColorValues[self.selectedWindow] = None   
+        self.plotMarkedPoints([self.selectedWindow])
+        
+    def setPointsStretchFactor(self):
         stretch,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Set Stretch Factor','stretch factor:',self.markPointsStretchFactor,min=0.00001,decimals=5)
         if not ok:
             return
