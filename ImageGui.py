@@ -2744,7 +2744,7 @@ class ImageGui():
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow] 
         for window in windows:
             x,y = self.getPlotPoints(window)
-            if self.markPointsColorValues[window] is None:
+            if self.markPointsColorValues[window] is None or len(self.markPointsColorValues[window])!=self.markedPoints[window].shape[0]:
                 color = tuple(255*c for c in self.markPointsColor)
                 pen = None if self.analysisMenuPointsLineNone.isChecked() else color
             else:
@@ -2931,7 +2931,8 @@ class ImageGui():
             vals = vals.astype(float)
             vals -= vals.min()
             vals /= vals.max()
-            self.markPointsColorValues[self.selectedWindow] = getattr(matplotlib.cm,self.markPointsColorMap)(vals)[:,:3]
+            clrs = (getattr(matplotlib.cm,self.markPointsColorMap)(vals)[:,:3]*255).astype(np.uint8)
+            self.markPointsColorValues[self.selectedWindow] = [tuple(clr) for clr in clrs]
         else:
             self.markPointsColorValues[self.selectedWindow] = None   
         self.plotMarkedPoints([self.selectedWindow])
