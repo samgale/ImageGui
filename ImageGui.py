@@ -772,8 +772,11 @@ class ImageGui():
                     ax.plot(np.append(x,x[0]),np.append(y,y[0]),'-',color=self.atlasLineColor)
         x,y = self.getPlotPoints(self.selectedWindow)
         if len(x)>0:
-            plotStyle = 'o' if self.analysisMenuPointsLineNone.isChecked() else 'o-'
-            ax.plot(x,y,plotStyle,color=self.markPointsColor,markeredgecolor=self.markPointsColor,markerfacecolor='none',markersize=self.markPointsSize)
+            if self.markPointsColorValues[self.selectedWindow] is None or self.markPointsColorValues[self.selectedWindow].shape[0]!=self.markedPoints[self.selectedWindow].shape[0]:
+                plotStyle = 'o' if self.analysisMenuPointsLineNone.isChecked() else 'o-'
+                ax.plot(x,y,plotStyle,color=self.markPointsColor,markeredgecolor=self.markPointsColor,markerfacecolor='none',markersize=self.markPointsSize)
+            else:
+                ax.scatter(x,y,s=self.markPointsSize,edgecolors=self.markPointsColorValuesRGB,facecolors=None)
         yRange,xRange = [self.imageRange[self.selectedWindow][axis] for axis in self.imageShapeIndex[self.selectedWindow][:2]]
         ax.set_xlim([xRange[0]-0.5,xRange[1]+0.5])
         ax.set_ylim([yRange[1]+0.5,yRange[0]-0.5,])
@@ -2744,13 +2747,14 @@ class ImageGui():
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow] 
         for window in windows:
             x,y = self.getPlotPoints(window)
-            if self.markPointsColorValues[window] is None or len(self.markPointsColorValues[window])!=self.markedPoints[window].shape[0]:
-                color = tuple(255*c for c in self.markPointsColor)
-                pen = None if self.analysisMenuPointsLineNone.isChecked() else color
-            else:
-                color = self.markPointsColorValues[window]
-                pen = None
-            self.markPointsPlot[window].setData(x=x,y=y,pen=pen,symbolSize=self.markPointsSize,symbolPen=color)
+            if len(x)>0:
+                if self.markPointsColorValues[window] is None or self.markPointsColorValues[window].shape[0]!=self.markedPoints[window].shape[0]:
+                    color = tuple(255*c for c in self.markPointsColor)
+                    pen = None if self.analysisMenuPointsLineNone.isChecked() else color
+                else:
+                    color = [pg.mkPen(clr) for clr in (self.markPointsColorValuesRGB*255).astype(np.uint8)]
+                    pen = None
+                self.markPointsPlot[window].setData(x=x,y=y,pen=pen,symbolSize=self.markPointsSize,symbolPen=color)
             
     def getPlotPoints(self,window):
         x = y = []
@@ -2916,8 +2920,8 @@ class ImageGui():
             return
         self.markPointsColorMap = colormap
         for window in self.displayedWindows:
-            if self.markedPoints[window] is not None and self.markPointsColorValues[window] is not None:
-                self.plotMarkedPoints([window])
+            if self.markPointsColorValues[window] is not None:
+                self.setPointColors(window)
         
     def applyPointsColorMap(self):
         if self.markedPoints[self.selectedWindow] is None:
@@ -2931,11 +2935,14 @@ class ImageGui():
             vals = vals.astype(float)
             vals -= vals.min()
             vals /= vals.max()
-            clrs = (getattr(matplotlib.cm,self.markPointsColorMap)(vals)[:,:3]*255).astype(np.uint8)
-            self.markPointsColorValues[self.selectedWindow] = [tuple(clr) for clr in clrs]
+            self.markPointsColorValues[self.selectedWindow] = vals
+            self.setPointColors(self.selectedWindow)
         else:
-            self.markPointsColorValues[self.selectedWindow] = None   
-        self.plotMarkedPoints([self.selectedWindow])
+            self.markPointsColorValues[self.selectedWindow] = None
+        
+    def setPointColors(self,window):
+        self.markPointsColorValuesRGB = getattr(matplotlib.cm,self.markPointsColorMap)(self.markPointsColorValues[window])[:,:3]
+        self.plotMarkedPoints([window])
         
     def setPointsStretchFactor(self):
         stretch,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Set Stretch Factor','stretch factor:',self.markPointsStretchFactor,min=0.00001,decimals=5)
