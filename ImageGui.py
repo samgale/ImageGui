@@ -2747,14 +2747,13 @@ class ImageGui():
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow] 
         for window in windows:
             x,y = self.getPlotPoints(window)
-            if len(x)>0:
-                if self.markPointsColorValues[window] is None or self.markPointsColorValues[window].shape[0]!=self.markedPoints[window].shape[0]:
-                    color = tuple(255*c for c in self.markPointsColor)
-                    pen = None if self.analysisMenuPointsLineNone.isChecked() else color
-                else:
-                    color = [pg.mkPen(clr) for clr in (self.markPointsColorValuesRGB*255).astype(np.uint8)]
-                    pen = None
-                self.markPointsPlot[window].setData(x=x,y=y,pen=pen,symbolSize=self.markPointsSize,symbolPen=color)
+            if len(x)==0 or self.markPointsColorValues[window] is None or self.markPointsColorValues[window].shape[0]!=self.markedPoints[window].shape[0]:
+                color = tuple(255*c for c in self.markPointsColor)
+                pen = None if self.analysisMenuPointsLineNone.isChecked() else color
+            else:
+                color = [pg.mkPen(clr) for clr in (self.markPointsColorValuesRGB*255).astype(np.uint8)]
+                pen = None
+            self.markPointsPlot[window].setData(x=x,y=y,pen=pen,symbolSize=self.markPointsSize,symbolPen=color)
             
     def getPlotPoints(self,window):
         x = y = []
