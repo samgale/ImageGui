@@ -1192,16 +1192,19 @@ class ImageGui():
                 if pts is None or pts.shape[0]<2:
                     raise Exception('At least two marked points are required for rotation to line')
                 y,x,z = pts[:,axes].T
-                xangle = math.degrees(math.atan(1/np.polyfit(x,y,1)[0])) if any(np.diff(x)) else 0
-                zangle = math.degrees(math.atan(1/np.polyfit(z,y,1)[0])) if any(np.diff(z)) else 0
-                self.rotationAngle = [xangle,zangle]
+                xangle = math.atan(1/np.polyfit(x,y,1)[0]) if any(np.diff(x)) else 0
+                zangle = math.atan(1/np.polyfit(z,y,1)[0]) if any(np.diff(z)) else 0
+                self.rotationAngle = [math.degrees(xangle),math.degrees(zangle)]
                 self.rotationAxes = [axes[:2],[axes[0],axes[2]]]
                 # only use portion of image volume containing points
-                padding = 10
+                pointsLength = ((z.max()-z.min())**2+(y.max()-y.min())**2)**0.5
+                pad = int(pointsLength*math.tan(zangle))
+                smax = max(self.imageObjs[fileInd].shape[axes[2]] for fileInd in self.selectedFileIndex)
+                pad = (min(z.min(),-pad+5),5) if pad<0 else (5,min(smax-z.max(),pad+5))
                 for fileInd in self.selectedFileIndex:
-                    self.imageObjs[fileInd].data = self.imageObjs[fileInd].data[:,:,int(z.min()-padding):int(math.ceil(z.max())+padding+1)]
+                    self.imageObjs[fileInd].data = self.imageObjs[fileInd].data[:,:,int(z.min()-pad[0]):int(math.ceil(z.max())+pad[1]+1)]
                     self.imageObjs[fileInd].shape = self.imageObjs[fileInd].data.shape
-                self.markedPoints[self.selectedWindow][:,2] -= z.min()-padding
+                self.markedPoints[self.selectedWindow][:,2] -= z.min()-pad[0]
             for i,(angle,ax) in enumerate(zip(self.rotationAngle,self.rotationAxes)):
                 if angle!=0:
                     if 0 in ax:
