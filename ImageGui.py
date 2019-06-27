@@ -87,13 +87,14 @@ class ImageGui():
         self.markPointsColorMap = 'plasma'
         self.markPointsColorValues = [None]*self.numWindows
         self.markPointsStretchFactor = 1
-        self.selectedPoint = None
+        self.selectedPoints = None
         self.alignRefWindow = [None]*self.numWindows
         self.alignRange = [[None,None] for _ in range(self.numWindows)]
         self.alignAxis = [None]*self.numWindows
         self.alignIndex = [None]*self.numWindows
         self.minContourVertices = 5
         self.contourLineColor = (1,1,0)
+        self.atlasTemplate = None
         self.atlasAnnotationData = None
         self.atlasAnnotationRegions = None
         self.atlasLineColor = (1,1,1)
@@ -376,6 +377,10 @@ class ImageGui():
         
         # atlas menu
         self.atlasMenu = self.menuBar.addMenu('Atlas')
+        self.atlasMenuLoad = QtWidgets.QAction('Load Template')
+        self.atlasMenuLoad.triggered.connect(self.loadAtlasTemplate)
+        self.atlasMenu.addAction(self.atlasMenuLoad)
+        
         self.atlasMenuSelect = self.atlasMenu.addMenu('Select Regions')
         self.atlasRegionLabels = ('SCs','LGd','LGv','LP','LD','VISa','VISal','VISam','VISl','VISli','VISp','VISpl','VISpm','VISpor','VISrl','ACA','LA','BLA')
         self.atlasRegionMenu = []
@@ -770,13 +775,13 @@ class ImageGui():
                 for c in contours:
                     x,y = np.squeeze(c).T
                     ax.plot(np.append(x,x[0]),np.append(y,y[0]),'-',color=self.atlasLineColor)
-        x,y = self.getPlotPoints(self.selectedWindow)
+        x,y,rows = self.getPlotPoints(self.selectedWindow)
         if len(x)>0:
             if self.markPointsColorValues[self.selectedWindow] is None or self.markPointsColorValues[self.selectedWindow].shape[0]!=self.markedPoints[self.selectedWindow].shape[0]:
                 plotStyle = 'o' if self.analysisMenuPointsLineNone.isChecked() else 'o-'
                 ax.plot(x,y,plotStyle,color=self.markPointsColor,markeredgecolor=self.markPointsColor,markerfacecolor='none',markersize=self.markPointsSize)
             else:
-                ax.scatter(x,y,s=self.markPointsSize,edgecolors=self.markPointsColorValuesRGB,facecolors=None)
+                ax.scatter(x,y,s=self.markPointsSize,edgecolors=self.markPointsColorValuesRGB[rows],facecolors=None)
         yRange,xRange = [self.imageRange[self.selectedWindow][axis] for axis in self.imageShapeIndex[self.selectedWindow][:2]]
         ax.set_xlim([xRange[0]-0.5,xRange[1]+0.5])
         ax.set_ylim([yRange[1]+0.5,yRange[0]-0.5,])
@@ -1685,11 +1690,8 @@ class ImageGui():
         _,contours,_ = cv2.findContours(mask.copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
         return contours
         
-    def getAtlasRegionID(self,regionLabel):
-        for structure in self.atlasAnnotationRegions.getElementsByTagName('structure'):
-            if structure.childNodes[7].childNodes[0].nodeValue[1:-1]==regionLabel:
-                return [int(sub.childNodes[0].nodeValue) for sub in structure.getElementsByTagName('id')]
-        return []
+    def loadAtlasTemplate(self):
+        pass
         
     def setAtlasRegions(self):
         if self.atlasAnnotationData is None:
@@ -1714,6 +1716,12 @@ class ImageGui():
             self.selectedAtlasRegions[window] = selectedRegions
             self.selectedAtlasRegionIDs[window] = regionIDs
         self.displayImage(windows)
+        
+    def getAtlasRegionID(self,regionLabel):
+        for structure in self.atlasAnnotationRegions.getElementsByTagName('structure'):
+            if structure.childNodes[7].childNodes[0].nodeValue[1:-1]==regionLabel:
+                return [int(sub.childNodes[0].nodeValue) for sub in structure.getElementsByTagName('id')]
+        return []
         
     def resetAtlasRegionMenu(self):
         for region in self.atlasRegionMenu:
@@ -1781,6 +1789,7 @@ class ImageGui():
                 axis = self.imageShapeIndex[self.selectedWindow][2]
                 imgInd = self.imageIndex[self.selectedWindow][axis]
                 if int(modifiers & QtCore.Qt.AltModifier)>0:
+                    # alt + comma (<)/period (>): swap current image with previous/next image
                     if key==QtCore.Qt.Key_Comma and imgInd>self.imageRange[self.selectedWindow][axis][0]:
                         swapInd = [imgInd-1,imgInd]
                         imgInd -= 1
@@ -1800,6 +1809,7 @@ class ImageGui():
                     self.imageNumEditBoxes[axis].setText(str(imgInd+1))
                     self.imageIndex[self.selectedWindow][axis] = imgInd
                 else:
+                    # comma (<)/period (>): show previous/next image
                     if key==QtCore.Qt.Key_Comma:
                         self.setImageNum(axis,imgInd-1)
                     else:
@@ -1809,6 +1819,7 @@ class ImageGui():
         elif key==QtCore.Qt.Key_L and int(modifiers & QtCore.Qt.AltModifier)>0:
             self.analysisMenuPointsLock.setChecked(not self.analysisMenuPointsLock.isChecked())
         elif self.stitchCheckbox.isChecked():
+            # arrow or plus/minus keys: move stitch position of selected images
             if key in moveKeys:
                 windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
                 fileInd = list(set(self.checkedFileIndex[self.selectedWindow]) & set(self.selectedFileIndex))
@@ -1817,6 +1828,7 @@ class ImageGui():
                 self.updateStitchShape(windows)
                 self.displayImage(windows)
         elif key==QtCore.Qt.Key_F and int(modifiers & QtCore.Qt.AltModifier)>0:
+            # alt + F: flip image horizontally
             axis = self.imageShapeIndex[self.selectedWindow][1]
             imgAxis = self.imageShapeIndex[self.selectedWindow][2]
             imgInd = self.imageIndex[self.selectedWindow][imgAxis]
@@ -1834,6 +1846,7 @@ class ImageGui():
                     mask = np.zeros(shape,dtype=np.uint8)
                     cv2.fillPoly(mask,[pts.astype(int)[:,self.imageShapeIndex[self.selectedWindow][1::-1]]],255)               
                     if key in (QtCore.Qt.Key_0,QtCore.Qt.Key_1):
+                        # alt + 0/1: turn pixels within polygon black/white
                         mask = mask.astype(bool)
                         if int(modifiers & QtCore.Qt.ControlModifier)>0:
                             mask = np.logical_not(mask,out=mask)
@@ -1850,6 +1863,7 @@ class ImageGui():
                     else:
                         moveAxis,dist = self.getMoveParams(self.selectedWindow,key,modifiers,True)
                         if key in moveKeys[:4]:
+                            # alt + arrow key: move pixels within polygon
                             if dist<0:
                                 minPt = int(pts[:,moveAxis].min())
                                 if minPt==0:
@@ -1878,6 +1892,7 @@ class ImageGui():
                             self.markedPoints[self.selectedWindow][rows,moveAxis] += dist
                             cols = [moveAxis]
                         else:
+                            # alt + plus/minus keys: rotate pixels within polygon
                             angle = -dist/10
                             rotMat = cv2.getRotationMatrix2D(tuple(s//2 for s in shape[::-1]),angle,1)
                             rotMask = cv2.warpAffine(mask,rotMat,shape[1::-1])
@@ -1911,43 +1926,47 @@ class ImageGui():
                                 ind = col if col==2 else int(not col)
                                 self.markPointsTable.item(row,ind).setText(str(self.markedPoints[self.selectedWindow][row,col]+1))
                     self.displayImage()
-        elif self.selectedPoint is not None:
+        elif self.selectedPoints is not None:
             if key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace)+moveKeys:
                 windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
                 for window in windows:
                     imgAxis = self.imageShapeIndex[window][2]
-                    if round(self.markedPoints[window][self.selectedPoint,imgAxis])==self.imageIndex[window][imgAxis]:
+                    if round(self.markedPoints[window][self.selectedPoints[0],imgAxis])==self.imageIndex[window][imgAxis]:
                         if key in (QtCore.Qt.Key_Delete,QtCore.Qt.Key_Backspace):
+                            # delete key: delete selected points
                             if not self.analysisMenuPointsLock.isChecked():
-                                if int(modifiers & QtCore.Qt.ControlModifier)>0 or self.markedPoints[window].shape[0]<2:
+                                if int(modifiers & QtCore.Qt.ControlModifier)>0:
                                     self.clearMarkedPoints()
                                 else:
-                                    self.deleteSelectedPoint()
+                                    self.deleteSelectedPoints()
                         elif key in moveKeys[:4]:
+                            # arrow keys: move selected points
                             moveAxis,moveDist = self.getMoveParams(window,key,modifiers,True)
-                            point = self.markedPoints[window][self.selectedPoint]
-                            point[moveAxis] += moveDist
                             rng = self.imageRange[window][moveAxis]
-                            if point[moveAxis]<rng[0]:
-                                point[moveAxis] = rng[0]
-                            elif point[moveAxis]>rng[1]:
-                                point[moveAxis] = rng[1]
-                            if window==self.selectedWindow:
-                                ind = 2 if moveAxis==2 else int(not moveAxis)
-                                self.markPointsTable.item(self.selectedPoint,ind).setText(str(point[moveAxis]+1))
+                            for point in self.selectedPoints:
+                                self.markedPoints[window][point,moveAxis] += moveDist
+                                if self.markedPoints[window][point,moveAxis]<rng[0]:
+                                    self.markedPoints[window][point,moveAxis] = rng[0]
+                                elif self.markedPoints[window][point,moveAxis]>rng[1]:
+                                    self.markedPoints[window][point,moveAxis] = rng[1]
+                                if window==self.selectedWindow:
+                                    ind = 2 if moveAxis==2 else int(not moveAxis)
+                                    self.markPointsTable.item(point,ind).setText(str(self.markedPoints[window][point,moveAxis]+1))
                             self.plotMarkedPoints([window])
                         else:
-                            if key==QtCore.Qt.Key_Minus:
-                                if self.markPointsSize>1:
-                                    self.markPointsSize -= 1
+                            if int(modifiers & QtCore.Qt.ControlModifier)>0:
+                                # shift + plus/minus keys: stretch points
+                                stretch = 0.99 if key==QtCore.Qt.Key_Minus else 1.01
+                                self.markPointsStretchFactor *= stretch
+                                self.stretchPoints(stretch)
                             else:
-                                self.markPointsSize += 1
-                            self.plotMarkedPoints(self.displayedWindows)
-        elif self.markedPoints[self.selectedWindow] is not None and int(modifiers & QtCore.Qt.ShiftModifier)>0:
-            if key in moveKeys[:2]:
-                stretch = 0.99 if key==moveKeys[0] else 1.01
-                self.markPointsStretchFactor *= stretch
-                self.stretchPoints(stretch)
+                                # plus/minus keys: increase/decrease point size if any visible points
+                                if key==QtCore.Qt.Key_Minus:
+                                    if self.markPointsSize>1:
+                                        self.markPointsSize -= 1
+                                else:
+                                    self.markPointsSize += 1
+                                self.plotMarkedPoints(self.displayedWindows)                
                     
     def getMoveParams(self,window,key,modifiers,flipVert=False):
         down,up = QtCore.Qt.Key_Down,QtCore.Qt.Key_Up
@@ -1997,27 +2016,39 @@ class ImageGui():
         x,y = int(event.pos().x()),int(event.pos().y())
         if not self.viewChannelsCheckbox.isChecked():
             self.windowListbox.setCurrentRow(window)
-        if event.button()==QtCore.Qt.LeftButton and self.view3dCheckbox.isChecked():
-            for line,pos in zip(self.view3dSliceLines[window],(y,x)):
-                line.setValue(pos)
-            self.updateView3dLines(axes=self.imageShapeIndex[window][:2],position=(y,x))
-        elif event.button()==QtCore.Qt.RightButton and self.markedPoints[window] is not None:
-            axis = self.imageShapeIndex[window][2]
-            rows = np.where(self.markedPoints[window][:,axis].round()==self.imageIndex[window][axis])[0]
-            if len(rows)>0:
-                self.setSelectedPoint(rows[np.argmin(np.sum((self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]]-[y,x])**2,axis=1)**0.5)])
+        if event.button()==QtCore.Qt.LeftButton:
+            if self.view3dCheckbox.isChecked():
+                for line,pos in zip(self.view3dSliceLines[window],(y,x)):
+                    line.setValue(pos)
+                self.updateView3dLines(axes=self.imageShapeIndex[window][:2],position=(y,x))
+        else:
+            if self.markedPoints[window] is not None:
+                axis = self.imageShapeIndex[window][2]
+                rows = np.where(self.markedPoints[window][:,axis].round()==self.imageIndex[window][axis])[0]
+                if len(rows)>0:
+                    self.setSelectedPoints([rows[np.argmin(np.sum((self.markedPoints[window][rows,:][:,self.imageShapeIndex[window][:2]]-[y,x])**2,axis=1)**0.5)]])
         
     def imageDoubleClickCallback(self,event,window):
-        if event.button()==QtCore.Qt.LeftButton and not self.analysisMenuPointsLock.isChecked():
-            x,y = (p*self.displayDownsample[window] for p in (event.pos().x(),event.pos().y()))
-            newPoint = np.array([y,x,self.imageIndex[window][self.imageShapeIndex[window][2]]])[list(self.imageShapeIndex[window])]
-            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [window]
-            for window in windows:
-                self.markedPoints[window] = newPoint[None,:] if self.markedPoints[window] is None else np.concatenate((self.markedPoints[window],newPoint[None,:]))
-                if window==self.selectedWindow:
-                    self.fillPointsTable(append=True)
-            self.setSelectedPoint(self.markedPoints[window].shape[0]-1)
-            self.plotMarkedPoints(windows)
+        if not self.viewChannelsCheckbox.isChecked():
+            self.windowListbox.setCurrentRow(window)
+        if event.button()==QtCore.Qt.LeftButton:
+            if not self.analysisMenuPointsLock.isChecked():
+                x,y = (p*self.displayDownsample[window] for p in (event.pos().x(),event.pos().y()))
+                newPoint = np.array([y,x,self.imageIndex[window][self.imageShapeIndex[window][2]]])[list(self.imageShapeIndex[window])]
+                windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [window]
+                for window in windows:
+                    self.markedPoints[window] = newPoint[None,:] if self.markedPoints[window] is None else np.concatenate((self.markedPoints[window],newPoint[None,:]))
+                    if window==self.selectedWindow:
+                        self.fillPointsTable(append=True)
+                self.setSelectedPoints([self.markedPoints[window].shape[0]-1])
+                self.plotMarkedPoints(windows)
+        else:
+            if self.markedPoints[window] is not None:
+                if self.markedPoints[window] is not None:
+                    axis = self.imageShapeIndex[window][2]
+                    rows = np.where(self.markedPoints[window][:,axis].round()==self.imageIndex[window][axis])[0]
+                    if len(rows)>0:
+                        self.setSelectedPoints(rows)
         
     def fileListboxSelectionCallback(self):
         self.selectedFileIndex = getSelectedItemsIndex(self.fileListbox)
@@ -2268,7 +2299,7 @@ class ImageGui():
             region.setChecked(ind in self.selectedAtlasRegions[window])
         self.clearPointsTable()
         self.fillPointsTable()
-        self.setSelectedPoint(None)
+        self.setSelectedPoints(None)
         isAligned = self.alignRefWindow[window] is not None
         self.alignCheckbox.setChecked(isAligned)
         alignRange = [str(self.alignRange[window][i]+1) if self.alignRange[window][i] is not None else '' for i in (0,1)]
@@ -2746,12 +2777,12 @@ class ImageGui():
         if windows is None:
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow] 
         for window in windows:
-            x,y = self.getPlotPoints(window)
+            x,y,rows = self.getPlotPoints(window)
             if len(x)==0 or self.markPointsColorValues[window] is None or self.markPointsColorValues[window].shape[0]!=self.markedPoints[window].shape[0]:
                 color = tuple(255*c for c in self.markPointsColor)
                 pen = None if self.analysisMenuPointsLineNone.isChecked() else color
             else:
-                color = [pg.mkPen(clr) for clr in (self.markPointsColorValuesRGB*255).astype(np.uint8)]
+                color = [pg.mkPen(clr) for clr in (self.markPointsColorValuesRGB[rows]*255).astype(np.uint8)]
                 pen = None
             self.markPointsPlot[window].setData(x=x,y=y,pen=pen,symbolSize=self.markPointsSize,symbolPen=color)
             
@@ -2767,7 +2798,7 @@ class ImageGui():
                 if self.analysisMenuPointsLinePoly.isChecked():
                     x = np.append(x,x[0])
                     y = np.append(y,y[0])
-        return x,y
+        return x,y,rows
         
     def fillPointsTable(self,append=False):
         if self.markedPoints[self.selectedWindow] is not None:
@@ -2805,29 +2836,33 @@ class ImageGui():
             self.markPointsColorValues[window] = None
             if window==self.selectedWindow:
                 self.clearPointsTable()
-        self.setSelectedPoint(None)
+        self.setSelectedPoints(None)
         self.markPointsStretchFactor = 1
         self.plotMarkedPoints(windows)
         
-    def setSelectedPoint(self,point):
-        self.selectedPoint = point
+    def setSelectedPoints(self,points):
+        self.selectedPoints = points
         self.markPointsTable.blockSignals(True)
         for row in range(self.markPointsTable.rowCount()):
-            selected = True if row==self.selectedPoint else False
+            selected = True if row in self.selectedPoints else False
             for col in range(self.markPointsTable.columnCount()):
                 self.markPointsTable.item(row,col).setSelected(selected)
         self.markPointsTable.blockSignals(False)
         
-    def deleteSelectedPoint(self):
-        windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
-        for window in windows:
-            self.markedPoints[window] = np.delete(self.markedPoints[window],self.selectedPoint,0)
-        self.markPointsTable.removeRow(self.selectedPoint)
-        self.setSelectedPoint(None)
-        self.plotMarkedPoints(windows)
+    def deleteSelectedPoints(self):
+        if len(self.selectedPoints)==len(self.markedPoints[self.selectedWindow]):
+            self.clearMarkedPoints()
+        else:
+            windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow]
+            for window in windows:
+                self.markedPoints[window] = np.delete(self.markedPoints[window],self.selectedPoints,0)
+            for row in self.selectedPoints:
+                self.markPointsTable.removeRow(row)
+            self.setSelectedPoints(None)
+            self.plotMarkedPoints(windows)
         
     def markPointsTableSelectionCallback(self):
-        self.selectedPoint = None
+        self.selectedPoints = None
         
     def setMarkedPointsLineStyle(self):
         sender = self.mainWin.sender()
