@@ -377,7 +377,7 @@ class ImageGui():
         
         # atlas menu
         self.atlasMenu = self.menuBar.addMenu('Atlas')
-        self.atlasMenuLoad = QtWidgets.QAction('Load Template')
+        self.atlasMenuLoad = QtWidgets.QAction('Load Template',self.mainWin)
         self.atlasMenuLoad.triggered.connect(self.loadAtlasTemplate)
         self.atlasMenu.addAction(self.atlasMenuLoad)
         
@@ -1691,7 +1691,14 @@ class ImageGui():
         return contours
         
     def loadAtlasTemplate(self):
-        pass
+        if self.atlasTemplate is None:
+            n = len(self.imageObjs)
+            self.openImageFiles()
+            if len(self.imageObjs)>n:
+                self.atlasTemplate = self.imageObjs[-1].data
+        else:
+            self.loadImageData(self.atlasTemplate,'Atlas Template')
+            self.imageObjs[-1].pixelSize = [25.0]*3
         
     def setAtlasRegions(self):
         if self.atlasAnnotationData is None:
@@ -2787,7 +2794,7 @@ class ImageGui():
             self.markPointsPlot[window].setData(x=x,y=y,pen=pen,symbolSize=self.markPointsSize,symbolPen=color)
             
     def getPlotPoints(self,window):
-        x = y = []
+        x = y = rows = []
         if self.markedPoints[window] is not None:
             axis = self.imageShapeIndex[window][2]
             rng = self.imageRange[window][axis] if self.sliceProjState[window] else [self.imageIndex[window][axis]]*2
@@ -2842,12 +2849,13 @@ class ImageGui():
         
     def setSelectedPoints(self,points):
         self.selectedPoints = points
-        self.markPointsTable.blockSignals(True)
-        for row in range(self.markPointsTable.rowCount()):
-            selected = True if row in self.selectedPoints else False
-            for col in range(self.markPointsTable.columnCount()):
-                self.markPointsTable.item(row,col).setSelected(selected)
-        self.markPointsTable.blockSignals(False)
+        if points is not None:
+            self.markPointsTable.blockSignals(True)
+            for row in range(self.markPointsTable.rowCount()):
+                selected = True if row in self.selectedPoints else False
+                for col in range(self.markPointsTable.columnCount()):
+                    self.markPointsTable.item(row,col).setSelected(selected)
+            self.markPointsTable.blockSignals(False)
         
     def deleteSelectedPoints(self):
         if len(self.selectedPoints)==len(self.markedPoints[self.selectedWindow]):
