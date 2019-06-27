@@ -1196,6 +1196,12 @@ class ImageGui():
                 zangle = math.degrees(math.atan(1/np.polyfit(z,y,1)[0])) if any(np.diff(z)) else 0
                 self.rotationAngle = [xangle,zangle]
                 self.rotationAxes = [axes[:2],[axes[0],axes[2]]]
+                # only use portion of image volume containing points
+                padding = 10
+                for fileInd in self.selectedFileIndex:
+                    self.imageObjs[fileInd].data = self.imageObjs[fileInd].data[:,:,int(z.min()-padding):int(math.ceil(z.max())+padding+1)]
+                    self.imageObjs[fileInd].shape = self.imageObjs[fileInd].data.shape
+                self.markedPoints[self.selectedWindow][:,2] -= z.min()-padding
             for i,(angle,ax) in enumerate(zip(self.rotationAngle,self.rotationAxes)):
                 if angle!=0:
                     if 0 in ax:
