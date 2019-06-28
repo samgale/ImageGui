@@ -86,6 +86,7 @@ class ImageGui():
         self.markPointsColor = (1,1,0)
         self.markPointsColorMap = 'plasma'
         self.markPointsColorValues = [None]*self.numWindows
+        self.markPointsColorThresh = [1]*self.numWindows
         self.markPointsStretchFactor = 1
         self.selectedPoints = None
         self.alignRefWindow = [None]*self.numWindows
@@ -301,7 +302,9 @@ class ImageGui():
         self.analysisMenuPoints = self.analysisMenu.addMenu('Points')
         
         self.analysisMenuPointsLock = QtWidgets.QAction('Lock',self.mainWin,checkable=True)
-        self.analysisMenuPoints.addAction(self.analysisMenuPointsLock)
+        self.analysisMenuPointsJitter = QtWidgets.QAction('Jitter',self.mainWin,checkable=True)
+        self.analysisMenuPointsJitter.triggered.connect(self.jitterPoints)
+        self.analysisMenuPoints.addActions([self.analysisMenuPointsLock,self.analysisMenuPointsJitter])
         
         self.analysisMenuPointsLine = self.analysisMenuPoints.addMenu('Line')
         self.analysisMenuPointsLineNone = QtWidgets.QAction('None',self.mainWin,checkable=True)
@@ -345,11 +348,15 @@ class ImageGui():
         
         self.analysisMenuPointsSetColorMap = QtWidgets.QAction('Set Color Map',self.mainWin)
         self.analysisMenuPointsSetColorMap.triggered.connect(self.setPointsColorMap)
+        self.analysisMenuPointsSetColorThresh = QtWidgets.QAction('Set Color Threshold',self.mainWin)
+        self.analysisMenuPointsSetColorThresh.triggered.connect(self.setPointsColorThresh)
         self.analysisMenuPointsApplyColorMap = QtWidgets.QAction('Apply Color Map',self.mainWin)
         self.analysisMenuPointsApplyColorMap.triggered.connect(self.applyPointsColorMap)
+        self.analysisMenuPoints.addActions([self.analysisMenuPointsSetColorMap,self.analysisMenuPointsSetColorThresh,self.analysisMenuPointsApplyColorMap])
+        
         self.analysisMenuPointsStretch = QtWidgets.QAction('Set Stretch Factor',self.mainWin)
         self.analysisMenuPointsStretch.triggered.connect(self.setPointsStretchFactor)
-        self.analysisMenuPoints.addActions([self.analysisMenuPointsSetColorMap,self.analysisMenuPointsApplyColorMap,self.analysisMenuPointsStretch])
+        self.analysisMenuPoints.addAction(self.analysisMenuPointsStretch)
         
         self.analysisMenuContours = self.analysisMenu.addMenu('Contours')
         self.analysisMenuContoursFind = self.analysisMenuContours.addMenu('Find')
@@ -2794,6 +2801,12 @@ class ImageGui():
             windows = self.displayedWindows if self.linkWindowsCheckbox.isChecked() else [self.selectedWindow] 
         for window in windows:
             x,y,rows = self.getPlotPoints(window)
+            if len(x)>0 and self.analysisMenuPointsJitter.isChecked():
+                for v in np.unique(y):
+                    i = y==v
+                    n = i.sum()
+                    if n>1:
+                        x[i] += np.arange(n)-n/2+0.5
             if len(x)==0 or self.markPointsColorValues[window] is None or self.markPointsColorValues[window].shape[0]!=self.markedPoints[window].shape[0]:
                 color = tuple(255*c for c in self.markPointsColor)
                 pen = None if self.analysisMenuPointsLineNone.isChecked() else color
@@ -2815,6 +2828,9 @@ class ImageGui():
                     x = np.append(x,x[0])
                     y = np.append(y,y[0])
         return x,y,rows
+    
+    def jitterPoints(self):
+        self.plotMarkedPoints()
         
     def fillPointsTable(self,append=False):
         if self.markedPoints[self.selectedWindow] is not None:
@@ -2973,6 +2989,12 @@ class ImageGui():
         for window in self.displayedWindows:
             if self.markPointsColorValues[window] is not None:
                 self.setPointColors(window)
+                
+    def setPointsColorThresh(self):
+        thresh,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Set Color Threshold','threshold:',self.markPointsColorThresh[self.selectedWindow],min=0.01,max=1,decimals=2)
+        if ok:
+            self.markPointsColorThresh[self.selectedWindow] = thresh
+            self.setPointColors(self.selectedWindow)
         
     def applyPointsColorMap(self):
         if self.markedPoints[self.selectedWindow] is None:
@@ -2982,6 +3004,7 @@ class ImageGui():
             return
         self.fileOpenPath = os.path.dirname(filePath)
         vals = np.load(filePath)
+        self.markPointsColorThresh[self.selectedWindow] = 1
         if vals.size==self.markedPoints[self.selectedWindow].shape[0]:
             vals = vals.astype(float)
             vals -= vals.min()
@@ -2992,7 +3015,9 @@ class ImageGui():
             self.markPointsColorValues[self.selectedWindow] = None
         
     def setPointColors(self,window):
-        self.markPointsColorValuesRGB = getattr(matplotlib.cm,self.markPointsColorMap)(self.markPointsColorValues[window])[:,:3]
+        vals = self.markPointsColorValues[window]/self.markPointsColorThresh[window]
+        vals[vals>1] = 1
+        self.markPointsColorValuesRGB = getattr(matplotlib.cm,self.markPointsColorMap)(vals)[:,:3]
         self.plotMarkedPoints([window])
         
     def setPointsStretchFactor(self):
