@@ -1965,14 +1965,9 @@ class ImageGui():
                         elif key in moveKeys[:4]:
                             # arrow keys: move selected points
                             moveAxis,moveDist = self.getMoveParams(window,key,modifiers,True)
-                            rng = self.imageRange[window][moveAxis]
-                            for point in self.selectedPoints:
-                                self.markedPoints[window][point,moveAxis] += moveDist
-                                if self.markedPoints[window][point,moveAxis]<rng[0]:
-                                    self.markedPoints[window][point,moveAxis] = rng[0]
-                                elif self.markedPoints[window][point,moveAxis]>rng[1]:
-                                    self.markedPoints[window][point,moveAxis] = rng[1]
-                                if window==self.selectedWindow:
+                            self.markedPoints[window][self.selectedPoints,moveAxis] += moveDist
+                            if window==self.selectedWindow:
+                                for point in self.selectedPoints:
                                     ind = 2 if moveAxis==2 else int(not moveAxis)
                                     self.markPointsTable.item(point,ind).setText(str(self.markedPoints[window][point,moveAxis]+1))
                             self.plotMarkedPoints([window])
