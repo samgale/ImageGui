@@ -3029,7 +3029,7 @@ class ImageGui():
         if rows.size>1:
             col = axes[0]
             y = self.markedPoints[self.selectedWindow][rows,col]
-            y0 = y.min()
+            y0 = y[-1]
             y -= y0
             y *= stretch
             y += y0
