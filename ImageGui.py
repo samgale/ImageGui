@@ -15,8 +15,8 @@ http://api.brain-map.org/api/v2/structure_graph_download/1.json
 from __future__ import division
 import sip
 sip.setapi('QString', 2)
-import math, os, time, zipfile
-import cv2, nibabel, nrrd, PIL, png, tifffile
+import math, os, PIL, time, zipfile
+import cv2, nibabel, nrrd, png, tifffile
 from xml.dom import minidom
 import numpy as np
 import scipy.io, scipy.interpolate, scipy.ndimage
@@ -1363,10 +1363,11 @@ class ImageGui():
                         else:
                             self.imageIndex[window][axis] = imgInd
                         image = self.getImage(window,binary=True).max(axis=2)
-                        _,contours,_ = cv2.findContours(image,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+                        contours,_ = cv2.findContours(image,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
                         mask.append(np.zeros(image.shape,dtype=np.uint8))
-                        cv2.drawContours(mask[-1],contours,-1,1,-1)                    
-                    _,self.transformMatrix[ind] = cv2.findTransformECC(mask[1],mask[0],np.eye(2,3,dtype=np.float32),cv2.MOTION_AFFINE)
+                        cv2.drawContours(mask[-1],contours,-1,1,-1)
+                    criteria = (cv2.TERM_CRITERIA_COUNT+cv2.TERM_CRITERIA_EPS,1000,1e-4)
+                    _,self.transformMatrix[ind] = cv2.findTransformECC(mask[1],mask[0],np.eye(2,3,dtype=np.float32),cv2.MOTION_AFFINE,criteria,inputMask=None,gaussFiltSize=1)
                 for ch in range(warpData.shape[3]):
                     warpData[:,:,ind,ch] = cv2.warpAffine(next(dataIter),self.transformMatrix[ind],self.transformShape[1::-1],flags=cv2.INTER_LINEAR)
             self.imageObjs[fileInd].data = warpData
@@ -1703,7 +1704,7 @@ class ImageGui():
             mask[:,mask.shape[1]//2:] = 0
         elif self.atlasMenuHemiRight.isChecked():
             mask[:,:mask.shape[1]//2] = 0
-        _,contours,_ = cv2.findContours(mask.copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+        contours,_ = cv2.findContours(mask.copy(order='C').astype(np.uint8),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
         return contours
         
     def loadAtlasTemplate(self):
@@ -3142,7 +3143,7 @@ class ImageGui():
         image = self.getImage(self.selectedWindow,downsample=self.displayDownsample[self.selectedWindow],binary=True)
         yRange,xRange = [[r//self.displayDownsample[self.selectedWindow] for r in self.imageRange[self.selectedWindow][axis]] for axis in self.imageShapeIndex[self.selectedWindow][:2]]
         roi = image[yRange[0]:yRange[1]+1,xRange[0]:xRange[1]+1]
-        _,contours,_ = cv2.findContours(roi.max(axis=2),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+        contours,_ = cv2.findContours(roi.max(axis=2),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
         contours = [c for c in contours if c.shape[0]>=self.minContourVertices]
         for c in contours:
             c[:,0,:2] += [xRange[0],yRange[0]]
