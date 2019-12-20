@@ -389,7 +389,7 @@ class ImageGui():
         self.atlasMenu.addAction(self.atlasMenuLoad)
         
         self.atlasMenuSelect = self.atlasMenu.addMenu('Select Regions')
-        self.atlasRegionLabels = ('SCs','LGd','LGv','LP','LD','VISa','VISal','VISam','VISl','VISli','VISp','VISpl','VISpm','VISpor','VISrl','ACA','LA','BLA')
+        self.atlasRegionLabels = ('MRN','SCs','LGd','LGv','LP','LD','VISa','VISal','VISam','VISl','VISli','VISp','VISpl','VISpm','VISpor','VISrl','ACA','ORB','RSP','CLA','LA','BLA','Isocortex')
         self.atlasRegionMenu = []
         for region in self.atlasRegionLabels:
             self.atlasRegionMenu.append(QtWidgets.QAction(region,self.mainWin,checkable=True))
