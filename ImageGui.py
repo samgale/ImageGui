@@ -3199,7 +3199,7 @@ class ImageGui():
         self.fileSavePath = os.path.dirname(filePath)
         image = self.getImage()
         for ind,r in enumerate(self.contourRectangles):
-            r = [i*self.displayDownsample[self.selectedWindow] for i in r]
+            r = [max(0,i*self.displayDownsample[self.selectedWindow]) for i in r]
             fileName,fileExt = os.path.splitext(filePath)
             cv2.imwrite(fileName+'_'+str(ind+1)+fileExt,image[r[1]:r[1]+r[3],r[0]:r[0]+r[2],::-1])
 
