@@ -895,7 +895,8 @@ class ImageGui():
                 if not ok:
                     return
                 if len(filePaths[0])%numCh>0:
-                    raise Exception('Number of files must be the same for each channel')
+                    QtWidgets.QMessageBox.about(self.mainWin,'Warning','Number of files must be the same for each channel')
+                    return
         elif fileType=='Bruker Dir + Siblings (*.xml)':
             dirPath = os.path.dirname(os.path.dirname(filePaths[0]))
             filePaths = []
@@ -1065,7 +1066,8 @@ class ImageGui():
             self.levelsPlotItem.getAxis('left').setTicks([[(0,'0'),(int(histMax),'1e'+str(int(histMax)))],[]])
             
     def convertImage(self):
-        self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
+        if not self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange():
+            return
         dtype = np.uint8 if self.mainWin.sender() is self.imageMenuConvertTo8Bit else np.uint16
         for fileInd in self.selectedFileIndex:
             if self.imageObjs[fileInd].dtype!=dtype:
@@ -1121,7 +1123,8 @@ class ImageGui():
         sender = self.mainWin.sender()
         if sender==self.imageMenuResamplePixelSize:
             if any(self.imageObjs[fileInd].pixelSize[0] is None for fileInd in self.selectedFileIndex):
-                raise Exception('Must define pixel size before using new pixel size for resampling')
+                QtWidgets.QMessageBox.about(self.mainWin,'Warning','Must define pixel size before using new pixel size for resampling')
+                return
             newPixelSize,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Resample Pixel Size','\u03BCm/pixel:',0,min=0,decimals=4)
             if not ok or newPixelSize==0:
                 return
@@ -1129,7 +1132,8 @@ class ImageGui():
             scaleFactor,ok = QtWidgets.QInputDialog.getDouble(self.mainWin,'Resample Scale Factor','scale factor (new/old size):',1,min=0.001,decimals=4)
             if not ok or scaleFactor==1:
                 return
-        self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()            
+        if not self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange():
+            return
         for fileInd in self.selectedFileIndex:
             oldPixelSize = self.imageObjs[fileInd].pixelSize[0]
             if sender==self.imageMenuResamplePixelSize:
@@ -1180,7 +1184,8 @@ class ImageGui():
         self.displayImage(self.getAffectedWindows())
         
     def rotateImage(self):
-        self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
+        if not self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange():
+            return
         sender = self.mainWin.sender()
         axes = self.imageShapeIndex[self.selectedWindow]
         if sender in (self.imageMenuRotate90C,self.imageMenuRotate90CC):
@@ -1197,7 +1202,8 @@ class ImageGui():
                 self.rotationAxes = [axes[:2]]
             else:
                 if pts is None or pts.shape[0]<2:
-                    raise Exception('At least two marked points are required for rotation to line')
+                    QtWidgets.QMessageBox.about(self.mainWin,'Warning','At least two marked points are required for rotation to line')
+                    return
                 y,x,z = pts[:,axes].T
                 xangle = math.atan(1/np.polyfit(x,y,1)[0]) if any(np.diff(x)) else 0
                 zangle = math.atan(1/np.polyfit(z,y,1)[0]) if any(np.diff(z)) else 0
@@ -1256,7 +1262,8 @@ class ImageGui():
         
     def saveOffsets(self):
         if len(self.selectedFileIndex)>1:
-            raise Exception('Select a single image object to return its offsets')
+            QtWidgets.QMessageBox.about(self.mainWin,'Warning','Select a single image object to return its offsets')
+            return
         filePath,fileType = QtWidgets.QFileDialog.getSaveFileName(self.mainWin,'Save As',self.fileSavePath,'*.npy')
         if filePath=='':
             return
@@ -1328,13 +1335,15 @@ class ImageGui():
     
     def transformImage(self):
         sender = self.mainWin.sender()
-        self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
+        if not self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange():
+            return
         axis = self.imageShapeIndex[self.selectedWindow][2]
         rng = self.imageRange[self.selectedWindow][axis]
         if sender is self.imageMenuTransformAligned:
             refWin = self.alignRefWindow[self.selectedWindow]
             if refWin is None:
-                raise Exception('Image must be aligned to reference before transforming')
+                QtWidgets.QMessageBox.about(self.mainWin,'Warning','Image must be aligned to reference before transforming')
+                return
             sliceProjState = []
             imageIndex = []
             for window in (refWin,self.selectedWindow):
@@ -1394,7 +1403,8 @@ class ImageGui():
     def warpImage(self):
         refWin = self.alignRefWindow[self.selectedWindow]
         if refWin is None:
-            raise Exception('Image must be aligned to reference before warping')
+            QtWidgets.QMessageBox.about(self.mainWin,'Warning','Image must be aligned to reference before warping')
+            return
         refPoints = self.markedPoints[refWin]
         warpPoints = self.markedPoints[self.selectedWindow]
         shapeIndex = self.imageShapeIndex[refWin]
@@ -1434,10 +1444,12 @@ class ImageGui():
         self.displayImage()
     
     def makeCCFVolume(self):
-        self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange()
+        if not self.checkIfSelectedDisplayedBeforeDtypeOrShapeChange():
+            return
         refWin = self.alignRefWindow[self.selectedWindow]
         if refWin is None or self.imageObjs[self.checkedFileIndex[refWin][0]].fileType!='nrrd' or self.imageShapeIndex[self.selectedWindow][2]!=2:
-            raise Exception('Image must be aligned to Allen Atlas coronal sections')
+            QtWidgets.QMessageBox.about(self.mainWin,'Warning','Image must be aligned to Allen Atlas coronal sections')
+            return
         rng = self.imageRange[self.selectedWindow][2]
         refShape = self.imageObjs[self.checkedFileIndex[refWin][0]].shape[:3]
         for fileInd in self.checkedFileIndex[self.selectedWindow]:
@@ -1467,7 +1479,9 @@ class ImageGui():
         for window in self.displayedWindows:
             selected = [True if i in self.selectedFileIndex else False for i in self.checkedFileIndex[window]]
             if (self.linkWindowsCheckbox.isChecked() or any(selected)) and not all(selected):
-                raise Exception('Must select all images displayed in the same window or in linked windows before data type or shape change')
+                QtWidgets.QMessageBox.about(self.mainWin,'Warning','Must select all images displayed in the same window or in linked windows before data type or shape change')
+                return False
+            return True
             
     def setViewBoxRangeLimits(self,windows=None):
         if windows is None:
@@ -2081,10 +2095,12 @@ class ImageGui():
             if len(checked)>0 or self.linkWindowsCheckbox.isChecked():
                 if self.imageObjs[fileInd].dtype!=self.imageObjs[checked[0]].dtype:
                     item.setCheckState(QtCore.Qt.Unchecked)
-                    raise Exception('Images displayed in the same window or linked windows must be the same data type')
+                    QtWidgets.QMessageBox.about(self.mainWin,'Warning','Images displayed in the same window or linked windows must be the same data type')
+                    return
                 if not self.stitchCheckbox.isChecked() and self.imageObjs[fileInd].shape[:3]!=self.imageObjs[checked[0]].shape[:3]:
                     item.setCheckState(QtCore.Qt.Unchecked)
-                    raise Exception('Images displayed in the same window or linked windows must be the same shape unless stitching')
+                    QtWidgets.QMessageBox.about(self.mainWin,'Warning','Images displayed in the same window or linked windows must be the same shape unless stitching')
+                    return
             checked.append(fileInd)
             checked.sort()
             if len(checked)>1:
@@ -2223,7 +2239,8 @@ class ImageGui():
             if self.linkWindowsCheckbox.isChecked():
                 if not (self.viewChannelsCheckbox.isChecked or self.view3dCheckbox.isChecked()):
                     self.stitchCheckbox.setChecked(False)
-                    raise Exception('Stitching can not be initiated while link windows mode is on unless channel view or view 3D is selected')
+                    QtWidgets.QMessageBox.about(self.mainWin,'Warning','Stitching can not be initiated while link windows mode is on unless channel view or view 3D is selected')
+                    return
             elif len(self.selectedFileIndex)<1:
                 self.stitchCheckbox.setChecked(False)
                 return
@@ -2330,13 +2347,15 @@ class ImageGui():
         if self.linkWindowsCheckbox.isChecked():
             if self.stitchCheckbox.isChecked():
                 self.linkWindowsCheckbox.setChecked(False)
-                raise Exception('Linking windows is not allowed while stitch mode is on unless channel view or 3D view is selected')
+                QtWidgets.QMessageBox.about(self.mainWin,'Warning','Linking windows is not allowed while stitch mode is on unless channel view or 3D view is selected')
+                return
             if len(self.displayedWindows)>1:
                 imageObj = self.imageObjs[self.checkedFileIndex[self.selectedWindow][0]]
                 otherWindows = [w for w in self.displayedWindows if w!=self.selectedWindow]
                 if any(self.imageObjs[self.checkedFileIndex[window][0]].shape[:3]!=imageObj.shape[:3] for window in otherWindows):
                     self.linkWindowsCheckbox.setChecked(False)
-                    raise Exception('Image shapes must be equal when linking windows')
+                    QtWidgets.QMessageBox.about(self.mainWin,'Warning','Image shapes must be equal when linking windows')
+                    return
                 for window in otherWindows:
                     self.imageRange[window] = self.imageRange[self.selectedWindow][:]
                 self.setViewBoxRange(self.displayedWindows)
@@ -3099,9 +3118,11 @@ class ImageGui():
             if start<0 or end>=self.imageShape[refWin][axis] or interval<1:
                 self.alignCheckbox.setChecked(False)
                 if interval<1:
-                    raise Exception('Image range must be less than or equal to the reference alignment range')
+                    QtWidgets.QMessageBox.about(self.mainWin,'Warning','Image range must be less than or equal to the reference alignment range')
+                    return
                 else:
-                    raise Exception('Align start and end must be between 1 and the number of reference images')
+                    QtWidgets.QMessageBox.about(self.mainWin,'Warning','Align start and end must be between 1 and the number of reference images')
+                    return
             self.alignRefWindow[self.selectedWindow] = refWin
             self.alignAxis[self.selectedWindow] = axis
             alignInd = np.arange(n)/interval+rng[0]
@@ -3267,14 +3288,18 @@ class ImageObj():
                     shape = s
                 else:
                     if (self.fileType=='bitfiff' and fext!='btf') or (self.fileType=='image' and fext=='btf'):
-                        raise Exception('All image files in series must be .btf if any are .btf')
+                        QtWidgets.QMessageBox.about(self.mainWin,'Warning','All image files in series must be .btf if any are .btf')
+                        return
                     if dtype!=self.dtype:
-                        raise Exception('All images in series must have the same data type')
+                        QtWidgets.QMessageBox.about(self.mainWin,'Warning','All images in series must have the same data type')
+                        return
                     if chFileOrg=='rgb':
                         if n!=numCh:
-                            raise Exception('All rgb images must have the same number of channels')
+                            QtWidgets.QMessageBox.about(self.mainWin,'Warning','All rgb images must have the same number of channels')
+                            return
                     elif n>1:
-                        raise Exception('Images must be grayscale if channel file organization is not rgb')
+                        QtWidgets.QMessageBox.about(self.mainWin,'Warning','Images must be grayscale if channel file organization is not rgb')
+                        return
                     shape = (max(shape[0],s[0]),max(shape[1],s[1]))
                 if chFileOrg=='rgb':
                     for ch in range(numCh):
